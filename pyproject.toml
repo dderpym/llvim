@@ -1,0 +1,19 @@
+[project]
+name = "llvim"
+version = "0.1.0"
+description = "A log is a sequence of messages, tracked like git."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"  # test files may share a name when they sit in different folders
+markers = ["needs_tmux: needs a real tmux, and is skipped without one"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
