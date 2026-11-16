@@ -1,19 +1,33 @@
 """core/writer.py: Writer, the only way to change a log."""
 
-from typing import IO
+from typing import IO, TYPE_CHECKING
 
-from llvim.core.log import LLVIM, RECORD, Author, Commit, Log, Request
+from llvim.core.git import LLVIM, Author, Commit
+from llvim.core.live import record
+from llvim.core.queue import Request
+
+if TYPE_CHECKING:
+    from llvim.core.log import Log
 
 
 class Moved(Exception):
     """The head is not where the writer's writes start from, so committing would drop a commit."""
 
 
+class Released(Exception):
+    """The writer was released: it no longer holds the log."""
+
+
+class Committing(Exception):
+    """A commit of this writer is running, and what was asked would change what it writes."""
+
+
 class Writer:
-    """Got from Log.claim. Writes are uncommitted until commit(); readers see them live.
+    """Got from `await Log.claim(...)`; `async with` it to release on leaving. Writes are uncommitted until commit();
+    readers see them live.
     On release or death, what is uncommitted is discarded."""
 
-    def __init__(self, log: Log, key: str, request: Request, ticket: IO[bytes]):
+    def __init__(self, log: "Log", key: str, request: Request, ticket: IO[bytes]):
         self._log, self._key, self._request, self._ticket = log, key, request, ticket
         self._base = log.head()
         self._messages, self._next, self._where = log._contents(self._base)
@@ -40,10 +54,11 @@ class Writer:
         self._change(b"D", id, b"")
 
     def restore(self, to: Commit) -> None:
-        """Make the log look like `to` again, as a new uncommitted change on top. Not while a commit is being written."""
+        """Make the log look like `to` again, as a new uncommitted change on top. Not while a commit is being
+        written."""
         self._check_held()
         if self._committing:
-            raise RuntimeError("a commit is being written")
+            raise Committing("a commit is being written")
         commit = self._log._resolve(to)
         restored, next_id, _ = self._log._contents(commit)
         base = self._log._contents(self._base)[0]
@@ -52,12 +67,12 @@ class Writer:
         self._record(b"R", 0, commit.encode())
 
     async def commit(self, *, author: Author = LLVIM, message: str = "") -> Commit:
-        """Make the writes permanent, as `author`'s. Raises Moved, keeping the writes, if something else moved the head, and
-        RuntimeError, also keeping them, if git would not move it for another reason.
+        """Make the writes permanent, as `author`'s. Raises Moved, keeping the writes, if something else moved the
+        head, and GitError, also keeping them, if git would not commit or move it for another reason.
         Writes made while it runs are not in it; they stay uncommitted."""
         self._check_held()
         if self._committing:
-            raise RuntimeError("a commit is being written")
+            raise Committing("a commit is being written")
         if self._base is not None and not self._dirty and self._next == self._saved_next:
             return self._base
         dirty, self._dirty, next_id = self._dirty, set(), self._next
@@ -82,21 +97,26 @@ class Writer:
 
     def outranked(self) -> bool:
         """Someone waiting has a higher priority. Yielding is the holder's choice."""
-        _, waiting = self._log._live()
+        _, waiting = self._log._queue.live()
         return bool(waiting) and waiting[0][1].priority > self._request.priority
 
     def release(self) -> None:
         if self._ticket is None:
             return
-        with self._log._mutex():
-            self._log._dismiss(self._key)
+        self._log._queue.leave(self._key)
         self._journal.close()
         self._ticket.close()
         self._ticket = None
 
+    async def __aenter__(self) -> "Writer":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        self.release()
+
     def _check_held(self) -> None:
         if self._ticket is None:
-            raise RuntimeError("this writer was released")
+            raise Released("this writer was released")
 
     def _change(self, op: bytes, id: int, payload: bytes) -> None:
         self._check_held()
@@ -113,15 +133,14 @@ class Writer:
                 self._record(b"D", id, b"")
 
     def _record(self, op: bytes, id: int, payload: bytes) -> None:
-        self._journal.write(RECORD.pack(op, id, len(payload)) + payload)
+        self._journal.write(record(op, id, payload))
         self._journal.flush()
 
     def _start_journal(self) -> IO[bytes]:
         path = self._log.dir / f"journal.{self._key}"
         unfinished = path.with_name(path.name + ".next")
         journal = open(unfinished, "wb")
-        base = (self._base or "").encode()
-        journal.write(RECORD.pack(b"B", 0, len(base)) + base)
+        journal.write(record(b"B", 0, (self._base or "").encode()))
         journal.flush()
         unfinished.rename(path)
         return journal
