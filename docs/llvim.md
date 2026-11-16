@@ -5,6 +5,7 @@ A coding agent reduced to one concept: the log, a sequence of messages tracked l
 | Folder | What it defines |
 |---|---|
 | [core](core/core.md) | The model: a log stored in git and the Writer that changes it |
+| [std](std/std.md) | The standard library: the message format, cues, and the programs of a session |
 
 ## Why
 
