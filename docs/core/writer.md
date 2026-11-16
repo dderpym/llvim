@@ -7,7 +7,7 @@ async with await log.claim(Request(0)) as writer:
     id = writer.append(b"")
     async for chunk in reply:
         writer.extend(id, chunk)       # readers see the reply grow
-        if writer.outranked():
+        if writer.outranked():         # or await writer.outranked_changed() alongside the reply
             break
     await writer.commit(author=Author("gpt-5", "model@example.com"), message="reply")
 ```
@@ -23,6 +23,7 @@ async with await log.claim(Request(0)) as writer:
   - git would not commit or move the head for another reason (a lock file left by a git that died, a full disk): raises `GitError` ([git.md](git.md)). The head is untouched, the writes stay uncommitted, and the commit can be tried again once the cause is gone;
   - while another commit of this Writer runs: raises `Committing`.
 - `outranked()`: `True` if someone waiting has a higher priority.
+- `outranked_changed()`, async: returns once `outranked()` may have changed since the last call. The first call returns at once.
 - `release()`, or leaving `async with`: gives up the log and discards what is uncommitted. Releasing twice does nothing. A released Writer raises `Released` on any write or commit.
 
 ## Using it
@@ -31,6 +32,8 @@ async with await log.claim(Request(0)) as writer:
 - Other tasks may go on writing while a commit runs. Those writes are not in the commit; they stay uncommitted, and readers go on seeing them. `restore` is refused while a commit runs, since it would change what the commit is writing.
 - Each write is one write to the journal file. It costs no git process, so streaming chunk by chunk is cheap. A commit costs two git processes (`fast-import` and `update-ref`), about 6 ms whatever the log's length. A restore reads the commit it restores, and is linear in its length.
 - After `Moved`, every later commit of that Writer fails too. Release it and claim again.
+- `outranked_changed()` may return when nothing that matters changed (a waiter of lower priority joined): look at `outranked()`
+  after it. Cancel a pending one before releasing; release closes what it waits on.
 
 ## Why it is this way
 
@@ -40,4 +43,9 @@ async with await log.claim(Request(0)) as writer:
 - **A commit costs the same however long the log is.** The Writer keeps the set of changed ids, so a commit compares nothing it did not change. It keeps the bucket of every message, so the log does not read the base commit's trees to find them.
 - **Writes during a commit are carried over, not refused.** A provider streams in one task and commits in another, so refusing writes during the few milliseconds of a commit would make it stop and wait. The commit takes the changed ids when it starts. When it ends, the ids changed since then are written into the fresh journal as they stand against the new head, so readers never lose them.
 - **The Writer and readers apply the journal with the same code.** Both use `apply` from [live.py](live.md), so what readers show before a commit and what the commit holds cannot disagree.
+- **`outranked_changed` is a wait, not a callback.** A holder waits on it alongside its own work, with
+  `asyncio.wait(..., FIRST_COMPLETED)`, so it can stop at once even while that work is blocked. It is the queue's `Wake`
+  ([queue.md](queue.md)) on `ticket.` files, made on the first call and kept until release, so a waiter that joins between two
+  calls is not missed. Making it in the constructor was rejected: every Writer would hold an inotify descriptor and a thread whether
+  it looks or not. A polling `outranked()` on a timer was rejected: it is late by the period and reads the queue's folder each time.
 - **Errors a caller handles have their own type.** `Moved` means claim again on top of the new head, `GitError` means fix the cause and commit again, `Committing` means wait for the running commit, and `Released` is a bug in the caller. Each is caught by its type, not by matching a message.

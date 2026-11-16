@@ -49,6 +49,7 @@ class FakeWriter:
 
     def __init__(self, log: "FakeLog", request: Request):
         self._log, self._request, self._released = log, request, False
+        self._waiting_seen: list[Request] | None = None
 
     def append(self, content: bytes) -> int:
         id = self._log._new_id()
@@ -78,7 +79,17 @@ class FakeWriter:
         return sha
 
     def outranked(self) -> bool:
-        return any(request.priority > self._request.priority for request in self._log.waiting)
+        return any(request.priority > self._request.priority for request in self._waiting())
+
+    async def outranked_changed(self) -> None:
+        if self._waiting_seen is not None:
+            while self._waiting() == self._waiting_seen:
+                await asyncio.sleep(0.001)
+        self._waiting_seen = self._waiting()
+
+    def _waiting(self) -> list[Request]:
+        """Who waits: those a test set, and those in `claim`."""
+        return self._log.waiting + [request for _, request in self._log._waiters]
 
     def release(self) -> None:
         if not self._released:
@@ -106,7 +117,8 @@ class FakeLog:
         self._live: dict[int, bytes] | None = None
         self._next = 0
         self._holder: Request | None = None
-        self.waiting: list[Request] = []
+        self.waiting: list[Request] = []  # set by a test: who waits, besides those in `claim`
+        self._waiters: list[tuple[int, Request]] = []
         self.claims: list[Request] = []
         self.authors: list = []
         self.version = 0  # raised by every change, which is how `changes` notices one
@@ -135,10 +147,16 @@ class FakeLog:
                 await asyncio.sleep(0.001)
 
     async def claim(self, request: Request, timeout: float | None = None) -> FakeWriter:
+        """As core's: the log goes to the waiter of highest priority, then the first to arrive, once nobody holds it."""
         self.claims.append(request)
-        async with asyncio.timeout(timeout):
-            while self._holder is not None:
-                await asyncio.sleep(0.001)
+        ticket = (len(self.claims), request)
+        self._waiters.append(ticket)
+        try:
+            async with asyncio.timeout(timeout):
+                while self._holder is not None or min(self._waiters, key=lambda w: (-w[1].priority, w[0])) is not ticket:
+                    await asyncio.sleep(0.001)
+        finally:
+            self._waiters.remove(ticket)
         self._holder, self._live = request, dict(self._committed())
         self.version += 1
         return FakeWriter(self, request)
@@ -147,7 +165,8 @@ class FakeLog:
         return self._holder
 
     def queue(self) -> list[Request]:
-        return ([self._holder] if self._holder else []) + sorted(self.waiting, key=lambda r: -r.priority)
+        waiting = self.waiting + [request for _, request in sorted(self._waiters, key=lambda w: w[0])]
+        return ([self._holder] if self._holder else []) + sorted(waiting, key=lambda r: -r.priority)
 
     # --- helpers that set a state up ---
 

@@ -112,15 +112,15 @@ async def test_text_that_already_arrived_is_kept_and_not_started_over_when_the_s
 # --- handing over ---
 
 
-async def test_someone_of_higher_priority_waiting_makes_it_stop_where_it_is_and_commit_what_arrived(fake_log, endpoint):
-    server = endpoint("one ", "two ", "three ")
+async def test_someone_of_higher_priority_already_waiting_gets_the_log_with_nothing_written(fake_log, endpoint):
+    server = endpoint("one ", "two ")
     fake_log.ask("hi")
     fake_log.waiting = [Request(5)]
-    await respond(fake_log, server.url)
-    assert said(fake_log)[2:] == [(["assistant"], "one ")] and fake_log.holder() is None
+    assert await respond(fake_log, server.url) is False
+    assert said(fake_log)[-1] == (["cue", "generate"], "") and fake_log.holder() is None
 
 
-async def test_it_hands_over_even_while_the_server_is_silent(fake_log, endpoint):
+async def test_it_stops_where_it_is_and_commits_what_arrived_even_while_the_server_is_silent(fake_log, endpoint):
     resume = threading.Event()
     server = endpoint("one ", resume, "two")
     fake_log.ask("hi")
@@ -129,7 +129,7 @@ async def test_it_hands_over_even_while_the_server_is_silent(fake_log, endpoint)
         await asyncio.sleep(0.005)
     fake_log.waiting = [Request(5)]
     try:
-        await asyncio.wait_for(answering, 2 * openai.POLL + 0.5)
+        await asyncio.wait_for(answering, 1)
     finally:
         resume.set()
     assert said(fake_log)[2:] == [(["assistant"], "one ")]

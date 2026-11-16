@@ -25,8 +25,8 @@ llvim-openai alt -p ~/proj -m llama3 --base-url http://localhost:11434/v1
 - **What is written:** the reply as an `["assistant"]` message with a `model` field, streamed with `extend`. Reasoning the server
   streams (`reasoning_content`, or `reasoning`) is a `["thinking"]` message the same way; a new message starts each time the text
   turns from one to the other. Then one commit, signed as the model.
-- **Handing over:** it claims at `priority` (0) and checks `outranked()` after each piece, and every 0.2 seconds while the server is
-  silent. Outranked, it stops where it is, commits what arrived and lets go. It writes no note: whoever took the log says why.
+- **Handing over:** it claims at `priority` (0) and waits on `outranked_changed()` alongside the server. Outranked, it stops where it
+  is, commits what arrived and lets go; outranked before anything arrived, it lets go with nothing written. It writes no note: whoever took the log says why.
 - **When it fails:** a connection that fails before any text has arrived is tried again up to `retries` times: unreachable, silent
   for `timeout` seconds, 429, or 5xx. The pause starts at `backoff` seconds and doubles, or is the server's `Retry-After`, never over
   a minute. Meanwhile a `["status"]` message says so, removed before the commit. Anything else, or the last retry failing, is an
@@ -35,10 +35,11 @@ llvim-openai alt -p ~/proj -m llama3 --base-url http://localhost:11434/v1
 ## Why it is this way
 
 - **It answers cues, not the last message.** See [cues.md](../cues.md).
-- **The reply is read in a thread, and checked on a timer.** `urllib` blocks, so a daemon thread reads the stream and hands pieces to
-  the loop. The provider looks at `outranked()` while it waits, so Ctrl-C stops a reply even while the server thinks in silence, and a
-  stalled server holds up neither the stop nor the program's exit. Checking only when a piece arrived was rejected: a model that
-  thinks for a minute before its first token could not be stopped for a minute.
+- **The reply is read in a thread, and waited on together with the queue.** `urllib` blocks, so a daemon thread reads the stream and
+  hands pieces to the loop. The loop waits for the next piece and for `outranked_changed()` at once, so Ctrl-C stops a reply the
+  moment it is asked, even while the server thinks in silence, and a stalled server holds up neither the stop nor the program's exit.
+  Checking only when a piece arrived was rejected: a model that thinks for a minute before its first token could not be stopped for
+  a minute. Checking on a timer was rejected too: it is late by the period, and reads the queue's folder each time.
 - **Text that arrived is never retried.** Starting over would write the answer twice.
 - **A status is removed, not committed.** Waiting to reconnect is not part of the conversation; viewers show it live, and history
   stays clean.

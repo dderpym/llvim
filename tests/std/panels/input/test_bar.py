@@ -2,11 +2,13 @@
 
 import asyncio
 import getpass
+from contextlib import aclosing
 
 import pytest
 
 from llvim.core import Request
-from llvim.std.conversation import entries
+from llvim.std.conversation import encode, entries
+from llvim.std.cues import GENERATE, cue, cued
 from llvim.std.panels.input import STANDARD
 from llvim.std.panels.input import bar as barmod
 from llvim.std.panels.input.bar import Bar
@@ -117,7 +119,7 @@ async def test_messages_go_in_the_order_they_were_typed_and_a_failed_one_is_repo
         type_(bar, text)
         bar.on_key(b"\r")
     await settle(bar)
-    assert got == ["a", "c"] and bar.notice == "not sent: boom" and not bar.outbox
+    assert got == ["a", "c"] and bar.notice == "not sent: 'b': boom" and not bar.outbox
 
 
 # --- ctrl-c ---
@@ -235,3 +237,122 @@ async def test_the_bar_runs_until_a_command_ends_it(make, stub_screen):
     bar._poke.set()
     await asyncio.wait_for(bar.run(), 1)
     assert ended == [1]
+
+
+# --- the turn, with a model and a tool runner that act on cues ---
+
+
+async def on_cue(log, channel, act):
+    """Act each time `channel` is cued, as a provider or a tool runner does: claim, check the cue again, act."""
+    async with aclosing(log.changes()) as changes:
+        async for snapshot in changes:
+            if cued(snapshot) == channel:
+                async with await log.claim(Request(0, {"who": channel})) as writer:
+                    if cued(log.read()) == channel:
+                        await act(writer)
+
+
+def model(replies):
+    """Answers each GENERATE cue with the next reply. One that holds a call leaves a cue for the runner, after `pause`."""
+
+    async def act(writer):
+        text, call = replies.pop(0)
+        writer.append(encode(["assistant"], text))
+        if call:
+            writer.append(encode(["tool_call"], call))
+            while not writer.outranked() and not typed.is_set():
+                await asyncio.sleep(0.001)
+            await asyncio.sleep(0.02)  # the message typed meanwhile is waiting to claim
+            writer.append(cue("tools"))
+        await writer.commit()
+
+    typed = asyncio.Event()
+    return act, typed
+
+
+async def runner(writer):
+    writer.append(encode(["tool_result"], "a.txt"))
+    writer.append(cue(GENERATE))
+    await writer.commit()
+
+
+async def test_a_message_typed_while_the_model_makes_calls_lands_after_the_calls_are_run_and_answered(fake_log):
+    act, typed = model([("let me look", "ls"), ("there is a.txt", None)])
+    programs = [asyncio.create_task(on_cue(fake_log, GENERATE, act)), asyncio.create_task(on_cue(fake_log, "tools", runner))]
+    try:
+        fake_log.ask("what is here?")
+        while fake_log.holder() is None:
+            await asyncio.sleep(0.001)
+        sending = asyncio.create_task(barmod.send(fake_log, "typed mid-reply"))
+        typed.set()
+        await asyncio.wait_for(sending, 2)
+    finally:
+        for program in programs:
+            program.cancel()
+        await asyncio.gather(*programs, return_exceptions=True)
+    assert [content or tags[-1] for tags, content in said(fake_log)] == [
+        "what is here?", "generate",
+        "let me look", "ls", "tools",
+        "a.txt", "generate",
+        "there is a.txt",
+        "typed mid-reply", "generate",
+    ]  # fmt: skip
+
+
+async def test_a_queued_message_is_forced_in_by_ctrl_c_which_stops_the_model_where_it_is(fake_log, stub_screen, layout):
+    turns = []
+
+    async def endless(writer):
+        """The first reply never ends by itself; the others are one word."""
+        turns.append(1)
+        reply = writer.append(encode(["assistant"], ""))
+        while len(turns) == 1 and not writer.outranked():
+            writer.extend(reply, b".")
+            await asyncio.sleep(0.001)
+        writer.extend(reply, b"ok" if len(turns) > 1 else b"")
+        await writer.commit()
+
+    panes, _ = layout()
+    model_task = asyncio.create_task(on_cue(fake_log, GENERATE, endless))
+    bar = Bar(fake_log, stub_screen, panes, StubGrowth(), commands=STANDARD)
+    try:
+        fake_log.ask("go on forever")
+        while fake_log.holder() is None:
+            await asyncio.sleep(0.001)
+        for line in ("first", "second"):
+            type_(bar, line)
+            bar.on_key(b"\r")
+        assert "queued" in bar.notice and len(bar.outbox) == 2
+        await asyncio.sleep(0.02)
+        assert len(bar.outbox) == 2  # the model never ends its turn by itself
+        bar.on_key(b"\x03")
+        await asyncio.wait_for(bar._sending, 2)
+        # the stop overtook the cue, so the model is not asked again until the first queued message
+        while fake_log.holder() is not None or cued(fake_log.read()) is not None:
+            await asyncio.sleep(0.001)
+    finally:
+        model_task.cancel()
+        await asyncio.gather(model_task, *bar._tasks, return_exceptions=True)
+    tail = [(tags, content.strip(".") if tags == ["assistant"] else content) for tags, content in said(fake_log)][2:]
+    assert tail[:2] == [(["assistant"], ""), (["user", "stop"], barmod.STOPPED)]
+    assert [content for tags, content in tail if tags != ["cue", "generate"]][2:] == ["first", "ok", "second", "ok"]
+
+
+async def test_a_continue_typed_while_the_model_works_is_queued_in_order_with_the_messages(fake_log, stub_screen, layout):
+    panes, _ = layout()
+    bar = Bar(fake_log, stub_screen, panes, StubGrowth(), commands=STANDARD)
+    fake_log.ask("first question")
+    fake_log.hold(Request(0, {"provider": "openai"}))
+    for line in ("/continue", "then this"):
+        type_(bar, line)
+        bar.on_key(b"\r")
+    assert [label for label, _ in bar.outbox] == ["/continue", "then this"] and "queued" in bar.notice
+    fake_log.say(["assistant"], "answer")
+    fake_log.hold(None)  # the turn is over; nobody answers the cues in this test, so each waits for the next
+    while cued(fake_log.read()) is None:
+        await asyncio.sleep(0.001)
+    assert said(fake_log)[-2:] == [(["assistant"], "answer"), (["cue", "generate"], "")]
+    assert [label for label, _ in bar.outbox] == ["then this"]  # it waits for the model to answer the continue
+    fake_log.say(["assistant"], "went on")  # the model answers /continue
+    await asyncio.wait_for(bar._sending, 1)
+    assert [c for _, c in said(fake_log)][-4:] == ["", "went on", "then this", ""]

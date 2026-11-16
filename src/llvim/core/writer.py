@@ -4,7 +4,8 @@ from typing import IO, TYPE_CHECKING
 
 from llvim.core.git import LLVIM, Author, Commit
 from llvim.core.live import record
-from llvim.core.queue import Request
+from llvim.core.queue import Request, Wake
+from llvim.core.watch import Watch
 
 if TYPE_CHECKING:
     from llvim.core.log import Log
@@ -35,6 +36,7 @@ class Writer:
         self._dirty: set[int] = set()
         self._committing = False
         self._journal = self._start_journal()
+        self._waiters: Wake | None = None
 
     def append(self, content: bytes) -> int:
         id = self._next
@@ -100,9 +102,20 @@ class Writer:
         _, waiting = self._log._queue.live()
         return bool(waiting) and waiting[0][1].priority > self._request.priority
 
+    async def outranked_changed(self) -> None:
+        """Return once `outranked()` may have changed since the last call. The first call returns at once: the watch
+        starts then, so what changed before it is unknown."""
+        self._check_held()
+        if self._waiters is None:
+            self._waiters = Wake(self._log._queue, Watch(self._log.dir, prefixes=("ticket.",)))
+            return
+        await self._waiters.changed()
+
     def release(self) -> None:
         if self._ticket is None:
             return
+        if self._waiters is not None:
+            self._waiters.close()
         self._log._queue.leave(self._key)
         self._journal.close()
         self._ticket.close()

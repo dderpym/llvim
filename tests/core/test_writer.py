@@ -200,6 +200,25 @@ async def test_outranked_when_a_higher_priority_waits(log, wait_until):
             (await claimed).release()
 
 
+async def test_outranked_changed_comes_when_someone_joins_the_queue(log):
+    async with await log.claim(Request(1)) as holder:
+        await holder.outranked_changed()
+        waiter = asyncio.create_task(log.claim(Request(2)))
+        async with asyncio.timeout(5):
+            await holder.outranked_changed()
+        assert holder.outranked()
+    async with asyncio.timeout(5):
+        (await waiter).release()
+
+
+async def test_outranked_changed_returns_at_once_the_first_time_and_then_waits_for_a_change(log):
+    async with await log.claim(Request(1)) as holder:
+        async with asyncio.timeout(1):
+            await holder.outranked_changed()
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(holder.outranked_changed(), 0.05)
+
+
 async def test_a_killed_writer_keeps_only_what_it_committed(log, spawn):
     child = spawn(
         "import asyncio, time\n"

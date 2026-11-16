@@ -16,6 +16,7 @@ class Context:
     quit: Callable[[], None]
     commands: dict[str, Command]
     panes: Any = None  # ``llvim.std.panels.keys.Panes``: to move the focus to another panel
+    queue: Callable[[str, Callable[[Any], Awaitable[None]]], None] | None = None  # the bar's queue: work done in turn
 
 
 @dataclass(frozen=True)

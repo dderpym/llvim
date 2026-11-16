@@ -1,34 +1,43 @@
-"""std/panels/input/generate.py: /continue leaves a cue for the model and writes nothing else."""
+"""std/panels/input/generate.py: /continue queues a cue for the model, which goes in once the turn is over."""
+
+import asyncio
 
 from llvim.core import Request
+from llvim.std.conversation import entries
 from llvim.std.cues import GENERATE, cued
 from llvim.std.panels.input.commands import Context
-from llvim.std.panels.input.generate import CONTINUE
+from llvim.std.panels.input.generate import CONTINUE, cue_the_model
 
 
-async def run(log):
-    notices = []
-    await CONTINUE.run(Context(log, notices.append, lambda: None, {"continue": CONTINUE}), "")
-    return notices
+def run(log):
+    notices, queued = [], []
+    CONTINUE.run(Context(log, notices.append, lambda: None, {"continue": CONTINUE}, queue=lambda *item: queued.append(item)), "")
+    return notices, queued
 
 
-async def test_it_cues_the_model_after_the_last_message(fake_log):
+def test_it_queues_a_cue_for_the_model_in_the_bars_queue(fake_log):
     fake_log.say(["assistant"], "one ")
-    assert await run(fake_log) == [] and cued(fake_log.read()) == GENERATE and len(fake_log.read().messages) == 2
+    assert run(fake_log) == ([], [("/continue", cue_the_model)])
 
 
-async def test_a_second_continue_adds_no_second_cue(fake_log):
+def test_it_queues_nothing_when_there_is_nothing_to_continue(fake_log):
+    notices, queued = run(fake_log)
+    assert "empty" in notices[0] and queued == []
+
+
+async def test_the_cue_goes_in_after_the_last_message_and_nothing_else(fake_log):
     fake_log.say(["assistant"], "one ")
-    await run(fake_log)
-    await run(fake_log)
-    assert len(fake_log.read().messages) == 2
+    await cue_the_model(fake_log)
+    assert [e.tags for e in entries(fake_log.read())] == [["assistant"], ["cue", "generate"]]
 
 
-async def test_it_does_nothing_when_there_is_nothing_to_continue(fake_log):
-    assert "empty" in (await run(fake_log))[0] and cued(fake_log.read()) is None
-
-
-async def test_it_does_not_wait_while_somebody_is_writing(fake_log):
+async def test_the_cue_waits_for_the_turn_in_progress_to_end(fake_log):
     fake_log.say(["user"], "hi")
-    fake_log.hold(Request(0, "provider"))
-    assert "busy" in (await run(fake_log))[0] and fake_log.claims[-1].priority >= 0
+    fake_log.hold(Request(0, {"provider": "openai"}))
+    going_on = asyncio.create_task(cue_the_model(fake_log))
+    await asyncio.sleep(0.02)
+    assert not going_on.done() and cued(fake_log.read()) is None
+    fake_log.say(["assistant"], "hello")
+    fake_log.hold(None)
+    await asyncio.wait_for(going_on, 1)
+    assert cued(fake_log.read()) == GENERATE

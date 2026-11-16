@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from contextlib import aclosing
 from typing import Any
 
-from llvim.core import Author, Log, Request
+from llvim.core import Author, Log, Request, Writer
 from llvim.std import env
 from llvim.std.conversation import Info, Tag, encode
 from llvim.std.cues import GENERATE, busy, cue, cued
@@ -41,18 +41,30 @@ async def idle(log: Log) -> None:
                 return
 
 
-async def send(log: Log, text: str) -> None:
-    """Commit `text` as a user message with a cue for the model, once the turn in progress is over."""
+async def after_turn(log: Log, write: Callable[[Writer], None], message: str = "") -> None:
+    """Once the whole turn in progress is over, claim the log, `write`, and commit as the user.
+
+    Waiting for the turn, not just for the holder, is what keeps a tool call answered: the model releases the log with a cue
+    for the runner, and a claim made while it held the log would be first in the queue, ahead of the runner."""
     user = getpass.getuser()
     while True:
         await idle(log)
         async with await log.claim(Request(PRIORITY, {Info.INPUT: user})) as writer:
             if cued(log.read()) is not None:
-                continue  # someone cued the model while we waited for the log: its turn comes first
-            writer.append(encode([Tag.USER], text))
-            writer.append(cue(GENERATE))
-            await writer.commit(author=Author(user))
+                continue  # someone cued while we waited for the log: their turn comes first
+            write(writer)
+            await writer.commit(author=Author(user), message=message)
             return
+
+
+async def send(log: Log, text: str) -> None:
+    """Commit `text` as a user message with a cue for the model, once the turn in progress is over."""
+
+    def write(writer: Writer) -> None:
+        writer.append(encode([Tag.USER], text))
+        writer.append(cue(GENERATE))
+
+    await after_turn(log, write)
 
 
 async def stop(log: Log) -> None:
@@ -91,7 +103,7 @@ class Bar:
         self.commands = {c.name: c for c in commands}
         self.editor, self.menu, self.notice = Editor(history), Menu(), ""
         self._send, self._quit, self._stop, self._busy = send, quit, stop, busy
-        self.outbox: deque[str] = deque()
+        self.outbox: deque[tuple[str, Callable[[Log], Awaitable[None]]]] = deque()
         self._sending: asyncio.Task | None = None
         self._stopping: asyncio.Task | None = None
         self._tasks: set[asyncio.Task] = set()
@@ -184,25 +196,29 @@ class Bar:
             return
         if text.startswith("//"):
             text = text[1:]
-        if self.outbox or self._busy(self.log):
-            self.say("queued: it goes in when the model's turn is over (ctrl-c stops the model)")
-        self.outbox.append(text)
         self.editor.submit()
+        self.queue(text, lambda log: self._send(log, text))
+
+    def queue(self, label: str, work: Callable[[Log], Awaitable[None]]) -> None:
+        """Run `work` after everything queued before it, each in turn. It should wait for the turn itself (`after_turn`)."""
+        if self.outbox or self._busy(self.log):
+            self.say(f"queued {label!r}: it goes in when the model's turn is over (ctrl-c stops the model)")
+        self.outbox.append((label, work))
         if self._sending is None or self._sending.done():
             self._sending = self._start(self._deliver())
 
     async def _deliver(self) -> None:
-        """Send the outbox one message at a time, in the order they were typed."""
         while self.outbox:
+            label, work = self.outbox[0]
             try:
-                await self._send(self.log, self.outbox[0])
+                await work(self.log)
             except Exception as error:
-                self.say(f"not sent: {error}")
+                self.say(f"not sent: {label!r}: {error}")
             self.outbox.popleft()
             self._poke.set()
 
     def _run_command(self, cmd: Command, arg: str) -> None:
-        context = Context(self.log, self.say, self.quit, self.commands, self.panes)
+        context = Context(self.log, self.say, self.quit, self.commands, self.panes, self.queue)
         try:
             result = cmd.run(context, arg)
         except Exception as error:

@@ -19,7 +19,6 @@ from llvim.std.providers import openai_settings as settings
 
 BODY_PREVIEW = 500  # bytes of an error response kept in the log
 MAX_PAUSE = 60.0  # longest wait between two tries, seconds
-POLL = 0.2  # seconds between two looks at whether someone outranks the provider, while the server is silent
 
 
 class ApiError(RuntimeError):
@@ -120,6 +119,13 @@ class _Reply:
 _DONE = object()
 
 
+async def _until_outranked(writer: Writer) -> None:
+    while True:
+        await writer.outranked_changed()
+        if writer.outranked():
+            return
+
+
 async def _relay(pieces: Iterator[tuple[str, str]], reply: _Reply) -> bool:
     """Write the pieces into the reply as they come. False if someone outranked the writer first.
 
@@ -148,23 +154,24 @@ async def _relay(pieces: Iterator[tuple[str, str]], reply: _Reply) -> bool:
             put(_DONE)
 
     threading.Thread(target=read, daemon=True).start()
+    outranked = asyncio.ensure_future(_until_outranked(reply.writer))
+    next_piece = None
     try:
         while True:
-            try:
-                piece = await asyncio.wait_for(arrived.get(), POLL)
-            except TimeoutError:
-                if reply.writer.outranked():
-                    return False
-                continue
+            next_piece = asyncio.ensure_future(arrived.get())
+            await asyncio.wait({next_piece, outranked}, return_when=asyncio.FIRST_COMPLETED)
+            if outranked.done():
+                outranked.result()
+                return False
+            piece = next_piece.result()
             if piece is _DONE:
                 return True
             if isinstance(piece, Exception):
                 raise piece
             reply.write(*piece)
-            if reply.writer.outranked():
-                return False
     finally:
         stop.set()
+        await _cancel(outranked, next_piece)
 
 
 async def _reconnect(writer: Writer, error: ApiError, attempt: int, retries: int, backoff: float) -> bool:
@@ -172,16 +179,21 @@ async def _reconnect(writer: Writer, error: ApiError, attempt: int, retries: int
     pause = min(error.retry_after if error.retry_after is not None else backoff * 2**attempt, MAX_PAUSE)
     note = f"attempting to reconnect in {pause:g}s ({attempt + 1} of {retries}): {str(error)[:200]}"
     status = writer.append(encode([Tag.STATUS], note))
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + pause
     try:
-        while (left := deadline - loop.time()) > 0:
-            if writer.outranked():
-                return False
-            await asyncio.sleep(min(left, POLL))
+        await asyncio.wait_for(_until_outranked(writer), pause)
+        return False
+    except TimeoutError:
         return True
     finally:
         writer.remove(status)
+
+
+async def _cancel(*tasks: asyncio.Future | None) -> None:
+    """Cancel the tasks and wait until they have ended, so none is left watching a writer that is released next."""
+    running = [task for task in tasks if task is not None]
+    for task in running:
+        task.cancel()
+    await asyncio.gather(*running, return_exceptions=True)
 
 
 async def respond(

@@ -22,8 +22,8 @@ Input(commands=[*STANDARD, my_command]).run()    # the log is the session's (env
 ## Using it
 
 - It needs a terminal: off one, it exits saying so.
-- **Enter** sends; **Shift-Enter** inserts a line break where the terminal tells it apart from Enter (through tmux, terminals with
-  xterm's modifyOtherKeys do; kitty does not). **Ctrl-C** stops the model if it is working, else clears the line. **Ctrl-D** does
+- **Enter** sends, or queues while the model works ([bar.md](bar.md)); **Shift-Enter** inserts a line break where the terminal tells it apart from Enter (through tmux, terminals with
+  xterm's modifyOtherKeys do; kitty does not). **Ctrl-C** stops the model if it is working, which forces the queue in, else clears the line. **Ctrl-D** does
   nothing, so the pane is not closed by accident. **Ctrl-L** redraws. **PageUp** and **PageDown** go to the viewer without the focus.
 - A line that starts with `/` and a word is a command, and typing the slash opens a menu above the prompt. **Tab** takes the only
   suggestion or steps through them, **Up** and **Down** move while it is open, **Esc** closes it until the line changes. An unknown

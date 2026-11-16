@@ -14,12 +14,20 @@ llvim-status = "llvim.std.panels.status:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--import-mode=importlib"  # test files may share a name when they sit in different folders
-filterwarnings = ["error"]  # a leaked file or process fails the test that leaked it
+addopts = "--import-mode=importlib" # test files may share a name when they sit in different folders
+filterwarnings = [
+  "error",
+] # a leaked file or process fails the test that leaked it
 markers = ["needs_tmux: needs a real tmux, and is skipped without one"]
 
+[tool.ruff]
+line-length = 120
+
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "pytest>=8",
+    "ruff>=0.17.5",
+]
 
 [build-system]
 requires = ["uv_build>=0.13,<0.14"]

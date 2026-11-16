@@ -11,7 +11,8 @@ async def fork(ctx, arg):
 - `Command(name, help, run, complete=None)`: `run(context, argument)` is called with the text after the name; it may be `async`.
   `complete(argument)` gives `(argument, help)` suggestions for what is typed after the command.
 - `command(name, help, complete=None)`: a decorator that makes a function that `Command`.
-- `Context(log, notice, quit, commands, panes=None)`: what a command may use. `notice(text)` says something under the prompt.
+- `Context(log, notice, quit, commands, panes=None, queue=None)`: what a command may use. `notice(text)` says something under the
+  prompt. `queue(label, work)` runs `work(log)` in the bar's queue, after what was typed before it ([bar.md](bar.md)).
 - `QUIT`, `EXIT`: end the session. `HELP`: lists the commands.
 
 ## Why it is this way

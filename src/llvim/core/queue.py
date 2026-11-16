@@ -145,12 +145,14 @@ class Wake:
             return
         event = asyncio.ensure_future(self._watch.changed())
         waits = {event} | ({self._unlocked} if self._unlocked else set())
-        await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
-        if self._unlocked and self._unlocked.done():
-            self._held = self._holder_now()
-        if not event.done():
+        try:
+            await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            # Also when this wait is cancelled: a task left reading the watch would fail once it is closed.
             event.cancel()
             await asyncio.wait({event})
+        if self._unlocked and self._unlocked.done():
+            self._held = self._holder_now()
 
     def close(self) -> None:
         self._watch.close()

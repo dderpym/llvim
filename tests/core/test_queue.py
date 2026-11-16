@@ -90,3 +90,13 @@ async def test_wake_comes_when_the_holders_lock_goes_with_no_event(queue):
         await wake.changed()
     assert queue.held() is None
     wake.close()
+
+
+async def test_a_cancelled_wake_leaves_no_task_behind_to_fail_once_the_watch_is_closed(queue):
+    wake = Wake(queue, Watch(queue.dir))
+    waiting = asyncio.create_task(wake.changed())
+    await asyncio.sleep(0.01)
+    waiting.cancel()
+    await asyncio.gather(waiting, return_exceptions=True)
+    assert asyncio.all_tasks() == {asyncio.current_task()}
+    wake.close()

@@ -3,7 +3,6 @@
 import asyncio
 
 from llvim.core import Request
-from llvim.std.panels.keys import Key
 from llvim.std.panels.logviewer.ansi import strip, width
 from llvim.std.panels.status.bar import StatusBar, compose
 
