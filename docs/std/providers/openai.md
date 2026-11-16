@@ -40,6 +40,12 @@ llvim-openai alt -p ~/proj -m llama3 --base-url http://localhost:11434/v1
   moment it is asked, even while the server thinks in silence, and a stalled server holds up neither the stop nor the program's exit.
   Checking only when a piece arrived was rejected: a model that thinks for a minute before its first token could not be stopped for
   a minute. Checking on a timer was rejected too: it is late by the period, and reads the queue's folder each time.
+- **It finds the system's root certificates itself.** A Python built elsewhere, as uv downloads it, looks for them only where its
+  builder's system keeps them; on NixOS that is nowhere, and every HTTPS server fails to verify. So if the default context trusts no
+  root, it loads the first CA bundle that exists of those Go looks for (`BUNDLES`), after `$NIX_SSL_CERT_FILE`. `$SSL_CERT_FILE`
+  still wins. Adding a dependency (`certifi`) for it was rejected: the system's bundle is the one the user maintains.
+- **A certificate failure is not retried.** Asking again gets the same certificate, so it is an error at once, which says to set
+  `$SSL_CERT_FILE` if the system does trust it.
 - **Text that arrived is never retried.** Starting over would write the answer twice.
 - **A status is removed, not committed.** Waiting to reconnect is not part of the conversation; viewers show it live, and history
   stays clean.

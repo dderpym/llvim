@@ -37,3 +37,10 @@ def test_a_settings_file_that_is_not_toml_or_has_a_wrong_entry_is_an_error_namin
     (tmp_path / "x.toml").write_text("a = 1\n")
     with pytest.raises(ValueError, match="x.toml: a is wrong"):
         env.settings("x.toml", lambda key, value: f"{key} is wrong")
+
+
+def test_the_tmux_server_is_llvim_socket_else_llvim(monkeypatch):
+    monkeypatch.delenv("LLVIM_SOCKET", raising=False)
+    assert env.socket() == "llvim"
+    monkeypatch.setenv("LLVIM_SOCKET", "mine")
+    assert env.socket() == "mine"

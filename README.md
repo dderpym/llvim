@@ -2,6 +2,16 @@
 
 A coding agent reduced to one concept: the **log**. A log is a sequence of messages, tracked like git.
 
+## Use
+
+```
+llvim-openai --configure   # once: base URL, API key (typed hidden) and model, saved to ~/.llvim/openai.toml
+cd your/project && llvim   # the log on top, a status line, and the input bar; Ctrl+Alt+Q leaves
+```
+
+`llvim alt` opens the log `alt` of the same project. The layout is a Python file you can copy and change: see
+[docs/session.md](docs/session.md).
+
 ## Develop
 
 Needs Python 3.12+, `uv` and git (and tmux). On nix:
@@ -19,6 +29,11 @@ How the code, docs and tests are written: [AGENTS.md](AGENTS.md).
 One page per source file, explaining why it is shaped the way it is:
 
 - [`llvim/`](docs/llvim.md)
+  - [`cli.py`](docs/cli.md)
+  - [`session.py`](docs/session.md)
+  - [`config/`](docs/config/config.md)
+    - [`config/start.py`](docs/config/start.md)
+    - [`config/tmux.conf`](docs/config/tmux.md)
 - [`core/`](docs/core/core.md)
   - [`core/git.py`](docs/core/git.md)
   - [`core/live.py`](docs/core/live.md)

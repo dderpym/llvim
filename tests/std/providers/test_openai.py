@@ -176,3 +176,40 @@ def test_the_command_answers_once_with_the_settings_it_finds_and_needs_a_model(f
     openai.main(["--once"])
     assert said(fake_log)[-1] == (["assistant"], "from the file") and entries(fake_log.read())[-1].extra == {"model": "file-model"}
     assert server.requests[0]["auth"] == "Bearer sk-file" and server.requests[0]["body"]["model"] == "file-model"
+
+
+# --- TLS ---
+
+
+def test_with_no_root_certificate_trusted_by_default_it_trusts_the_first_system_bundle_there_is(monkeypatch, tmp_path):
+    import os
+    import ssl
+
+    real = next((bundle for bundle in openai.BUNDLES if os.path.isfile(bundle)), None)
+    if real is None:
+        pytest.skip("no system CA bundle here")
+    monkeypatch.setattr(openai.ssl, "create_default_context", lambda: ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+    monkeypatch.setattr(openai, "BUNDLES", (str(tmp_path / "missing.crt"), real))
+    monkeypatch.delenv("NIX_SSL_CERT_FILE", raising=False)
+    openai.tls.cache_clear()
+    try:
+        assert openai.tls().cert_store_stats()["x509_ca"] > 0
+    finally:
+        openai.tls.cache_clear()
+
+
+async def test_a_certificate_it_cannot_trust_is_an_error_at_once_that_says_what_to_do(fake_log, monkeypatch):
+    import ssl
+    import urllib.error
+
+    tries = []
+
+    def refuse(*args, **kwargs):
+        tries.append(1)
+        raise urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed"))
+
+    monkeypatch.setattr(openai.urllib.request, "urlopen", refuse)
+    fake_log.ask("hi")
+    await respond(fake_log, "https://example.invalid/v1", backoff=0.01)
+    tags, content = said(fake_log)[-1]
+    assert tries == [1] and tags == ["error"] and "SSL_CERT_FILE" in content

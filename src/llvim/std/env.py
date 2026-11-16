@@ -1,4 +1,4 @@
-"""std/env.py: where llvim keeps its settings, which log a program is for, and reading a settings file."""
+"""std/env.py: where llvim keeps its settings, its tmux server, which log a program is for, and reading a settings file."""
 
 import os
 import tomllib
@@ -12,6 +12,11 @@ from llvim.core import Log
 def home() -> Path:
     """`$LLVIM_HOME`, else `~/.llvim`. An empty value counts as unset."""
     return Path(os.environ.get("LLVIM_HOME") or Path.home() / ".llvim")
+
+
+def socket() -> str:
+    """`$LLVIM_SOCKET`, the name of llvim's tmux server, else `llvim`."""
+    return os.environ.get("LLVIM_SOCKET") or "llvim"
 
 
 def log() -> Log:

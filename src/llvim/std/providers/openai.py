@@ -2,8 +2,11 @@
 
 import argparse
 import asyncio
+import functools
 import getpass
 import json
+import os
+import ssl
 import sys
 import threading
 import urllib.error
@@ -18,6 +21,15 @@ from llvim.std.cues import GENERATE, cued
 from llvim.std.providers import openai_settings as settings
 
 BODY_PREVIEW = 500  # bytes of an error response kept in the log
+# Where systems keep their CA bundle, as Go's crypto/x509 looks for it. A Python built elsewhere (uv's, say) looks only where its
+# builder's system keeps it, which on NixOS is nowhere.
+BUNDLES = (
+    "/etc/ssl/certs/ca-certificates.crt",  # Debian, Ubuntu, Arch, NixOS
+    "/etc/pki/tls/certs/ca-bundle.crt",  # Fedora, RHEL
+    "/etc/ssl/ca-bundle.pem",  # openSUSE
+    "/etc/pki/tls/cacert.pem",  # OpenELEC
+    "/etc/ssl/cert.pem",  # Alpine, macOS
+)
 MAX_PAUSE = 60.0  # longest wait between two tries, seconds
 
 
@@ -64,7 +76,7 @@ def stream(
         | ({"Authorization": f"Bearer {api_key}"} if api_key else {}),
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=tls()) as response:
             for raw in response:
                 line = raw.decode().strip()
                 if not line.startswith("data:"):
@@ -90,12 +102,27 @@ def stream(
             retryable=e.code == 429 or e.code >= 500,
             retry_after=float(wait) if wait.isdigit() else None,
         ) from None
-    except OSError as e:  # unreachable, reset, timed out
+    except OSError as e:  # unreachable, reset, timed out, or a certificate it cannot trust
+        if isinstance(getattr(e, "reason", e), ssl.SSLCertVerificationError):
+            fix = "; if your system trusts it, set SSL_CERT_FILE to your system's CA bundle"
+            raise ApiError(f"{type(e).__name__}: {e}{fix}") from None  # asking again gets the same certificate
         raise ApiError(f"{type(e).__name__}: {e}", retryable=True) from None
     except ValueError as e:  # not JSON
         raise ApiError(f"{type(e).__name__}: {e}") from None
     except (AttributeError, KeyError, TypeError) as e:  # JSON, but not in the shape of a chat stream
         raise ApiError(f"the server sent something that is not a chat stream ({type(e).__name__}: {e})") from None
+
+
+@functools.cache
+def tls() -> ssl.SSLContext:
+    """The default context, and if it trusts no root certificate, the system's CA bundle. `SSL_CERT_FILE` still wins."""
+    context = ssl.create_default_context()
+    if context.cert_store_stats()["x509_ca"] == 0:
+        for bundle in (os.environ.get("NIX_SSL_CERT_FILE"), *BUNDLES):
+            if bundle and os.path.isfile(bundle):
+                context.load_verify_locations(cafile=bundle)
+                break
+    return context
 
 
 class _Reply:

@@ -8,6 +8,7 @@ data = env.settings("openai.toml", lambda key, value: None if key == "model" els
 ```
 
 - `home()`: `$LLVIM_HOME`, else `~/.llvim`. An empty value counts as unset.
+- `socket()`: `$LLVIM_SOCKET`, the name of llvim's tmux server, else `llvim` ([cli.md](../cli.md)).
 - `log()`: the log `$LLVIM_LOG` (default `main`) of the project `$LLVIM_PROJECT` (default the working folder).
 - `settings(file, problem)`: what `home()/file` holds as TOML, or `{}` without the file.
   - not TOML: raises `ValueError` naming the file;
