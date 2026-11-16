@@ -9,6 +9,7 @@ dependencies = []
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--import-mode=importlib"  # test files may share a name when they sit in different folders
+filterwarnings = ["error"]  # a leaked file or process fails the test that leaked it
 markers = ["needs_tmux: needs a real tmux, and is skipped without one"]
 
 [dependency-groups]

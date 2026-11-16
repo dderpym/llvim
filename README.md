@@ -17,6 +17,3 @@ How the code, docs and tests are written: [AGENTS.md](AGENTS.md).
 ## Docs
 
 One page per source file, explaining why it is shaped the way it is:
-
-- [llvim](docs/llvim.md)
-  - [core](docs/core/core.md): [store](docs/core/store.md), [repo](docs/core/repo.md), [layout](docs/core/layout.md), [history](docs/core/history.md), [log](docs/core/log.md), [writer](docs/core/writer.md), [journal](docs/core/journal.md), [lock](docs/core/lock.md), [cue](docs/core/cue.md)
