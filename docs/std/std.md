@@ -8,10 +8,12 @@ run in a session. Nothing in core imports from here.
 | [env.py](env.md) | `home`, `log`, `settings`: where llvim keeps its settings, and which log a program is for |
 | [conversation.py](conversation.md) | `Entry`, `encode`, `decode`, `entries`, `Tag`, `Info`: the message format and its tags |
 | [cues.py](cues.md) | `cue`, `cued`, `busy`, `GENERATE`, `TOOLS`: messages that ask a program to act |
+| [context.py](context.md) | `ContextRenderer`, `render`: a step between a log and a program that reads it as a conversation |
 | [tmux.py](tmux.md) | `Control`, `Embedded`: a quick connection to tmux, and a program in a hidden tmux window |
 | [panels/](panels/panels.md) | The programs for the panes of a session: the viewer, the input bar and the status bar |
 | [providers/](providers/providers.md) | The programs that answer a log: the OpenAI-compatible provider |
 | [tools/](tools/tools.md) | What a model may call, the runner that runs the calls, and bash |
+| [void/](void/void.md) | Voiding: taking a message out of the conversation and leaving it in the log |
 
 ## Why
 

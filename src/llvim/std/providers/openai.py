@@ -16,6 +16,7 @@ from collections.abc import Iterable, Iterator
 
 from llvim.core import Author, Log, Request, Writer
 from llvim.std import env
+from llvim.std.context import ContextRenderer, render
 from llvim.std.conversation import ROLES, Entry, Field, Info, Tag, encode, entries
 from llvim.std.cues import GENERATE, TOOLS, cued, receive, send, take
 from llvim.std.providers import openai_settings as settings
@@ -310,13 +311,14 @@ async def respond(
     retries: int = 5,
     backoff: float = 1.0,
     tools: Iterable[Tool] = (),
+    context: Iterable[ContextRenderer] = (),
 ) -> bool:
     """Answer the log if the model is cued now. Returns whether it wrote anything."""
     writer = await take(log, GENERATE, _request(model, priority))
     if writer is None:
         return False
     async with writer:
-        return await answer(log, writer, model, base_url, api_key, timeout, retries, backoff, tools)
+        return await answer(log, writer, model, base_url, api_key, timeout, retries, backoff, tools, context)
 
 
 async def answer(
@@ -329,10 +331,11 @@ async def answer(
     retries: int,
     backoff: float,
     tools: Iterable[Tool] = (),
+    context: Iterable[ContextRenderer] = (),
 ) -> bool:
     """Answer the cue for the model, with the log held. Returns whether it wrote anything. If the reply made calls and was not
-    cut short, the tools are cued."""
-    history = chat(entries(log.read()))
+    cut short, the tools are cued. The model is sent the log as the `context` renderers leave it."""
+    history = chat(render(entries(log.read()), context))
     offered = [to_openai(tool) for tool in tools] or None
     reply = _Reply(writer, model)
     finished = False
@@ -377,10 +380,11 @@ async def serve(
     retries: int,
     priority: int,
     tools: Iterable[Tool] = (),
+    context: Iterable[ContextRenderer] = (),
 ):
     """Answer each cue for the model, until cancelled."""
     async for writer in receive(log, GENERATE, _request(model, priority)):
-        await answer(log, writer, model, base_url, api_key, timeout, retries, 1.0, tools)
+        await answer(log, writer, model, base_url, api_key, timeout, retries, 1.0, tools, context)
 
 
 def configure() -> None:
@@ -404,7 +408,8 @@ def configure() -> None:
 
 class OpenAI:
     """The provider as a program: `OpenAI().run()` answers the log until interrupted. `model` and `base_url` default to the
-    settings (`openai_settings`), `log` to the session's (`env.log`). `tools` are offered to the model; a runner runs them."""
+    settings (`openai_settings`), `log` to the session's (`env.log`). `tools` are offered to the model; a runner runs them. `context` renderers
+    say what of the log the model is sent."""
 
     def __init__(
         self,
@@ -416,8 +421,10 @@ class OpenAI:
         priority: int = 0,
         once: bool = False,
         tools: Iterable[Tool] = (),
+        context: Iterable[ContextRenderer] = (),
     ):
         self.model, self.base_url, self.log, self.once, self.tools = model, base_url, log, once, list(tools)
+        self.context = list(context)
         self.timeout, self.retries, self.priority = timeout, retries, priority
 
     def run(self) -> None:
@@ -433,9 +440,21 @@ class OpenAI:
             sys.exit("llvim-openai: no model: pass --model, set $LLVIM_MODEL, or save one with --configure")
         log = self.log or env.log()
         if self.once:
-            work = respond(log, model, base_url, api_key, self.timeout, self.priority, self.retries, tools=self.tools)
+            work = respond(
+                log,
+                model,
+                base_url,
+                api_key,
+                self.timeout,
+                self.priority,
+                self.retries,
+                tools=self.tools,
+                context=self.context,
+            )
         else:
-            work = serve(log, model, base_url, api_key, self.timeout, self.retries, self.priority, self.tools)
+            work = serve(
+                log, model, base_url, api_key, self.timeout, self.retries, self.priority, self.tools, self.context
+            )
         try:
             asyncio.run(work)
         except KeyboardInterrupt:

@@ -9,7 +9,7 @@ from llvim.cli import command
 pytestmark = pytest.mark.needs_tmux
 
 
-ROLES = {"--start": "viewer", ":palette": "input", ":Status": "status", ":model": "openai", ":tools": "tools"}  # what each pane runs
+ROLES = {"--start": "viewer", ":palette": "input", ":status": "status", ":model": "openai", ":tools": "tools"}  # what each pane runs
 
 
 def role(start_command: str) -> str | None:

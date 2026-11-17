@@ -8,6 +8,7 @@ from collections.abc import Iterable
 
 from llvim.core import Log
 from llvim.std import env
+from llvim.std.context import ContextRenderer
 from llvim.std.panels.status.bar import State, StatusBar, StatusRenderer, compose
 from llvim.std.panels.status.renderers import BUILTIN, activity, model
 
@@ -15,10 +16,16 @@ __all__ = ["BUILTIN", "State", "Status", "StatusBar", "StatusRenderer", "activit
 
 
 class Status:
-    """`Status(renderers=[...]).run()`: the renderers, in order (default `BUILTIN`). `log` defaults to the session's."""
+    """`Status(renderers=[...]).run()`: the renderers, in order (default `BUILTIN`). `log` defaults to the session's. `context`
+    renderers say what of the log counts as the conversation, as they do for a provider."""
 
-    def __init__(self, renderers: Iterable[StatusRenderer] = BUILTIN, log: Log | None = None):
-        self.renderers, self.log = list(renderers), log
+    def __init__(
+        self,
+        renderers: Iterable[StatusRenderer] = BUILTIN,
+        log: Log | None = None,
+        context: Iterable[ContextRenderer] = (),
+    ):
+        self.renderers, self.log, self.context = list(renderers), log, list(context)
 
     def run(self) -> None:
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -28,7 +35,7 @@ class Status:
         log = self.log or env.log()
         try:
             with Screen(mouse=False) as screen:
-                asyncio.run(StatusBar(log, screen, self.renderers).run())
+                asyncio.run(StatusBar(log, screen, self.renderers, context=self.context).run())
         except KeyboardInterrupt:
             pass
 

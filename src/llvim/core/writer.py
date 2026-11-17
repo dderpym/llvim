@@ -3,6 +3,7 @@
 from typing import IO, TYPE_CHECKING
 
 from llvim.core.git import LLVIM, Author, Commit
+from llvim.core.handoff import Offer
 from llvim.core.live import record
 from llvim.core.queue import Request, Wake
 from llvim.core.watch import Watch
@@ -111,12 +112,22 @@ class Writer:
             return
         await self._waiters.changed()
 
+    def offer(self) -> Offer:
+        """Offer the log, still held, to another process: give it `offer.address`, and `await offer.taken()`. Once it
+        is taken this writer is released, and what was uncommitted is discarded."""
+        self._check_held()
+        return Offer(self._key, self._ticket, self._hand_over)
+
     def release(self) -> None:
         if self._ticket is None:
             return
+        self._log._queue.leave(self._key)
+        self._hand_over()
+
+    def _hand_over(self) -> None:
+        """Stop being the holder, without ending the claim: the process that adopted it keeps it alive."""
         if self._waiters is not None:
             self._waiters.close()
-        self._log._queue.leave(self._key)
         self._journal.close()
         self._ticket.close()
         self._ticket = None

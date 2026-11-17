@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from llvim.core import git
+from llvim.core import git, handoff
 from llvim.core.git import Author, Commit, GitError
 from llvim.core.live import Contents, Snapshot, View, apply, ordered
 from llvim.core.queue import Queue, Request, Wake
@@ -93,6 +93,16 @@ class Log:
                 raise
         finally:
             turns.close()
+
+    async def adopt(self, address: str) -> Writer:
+        """The Writer of a claim another process offered at `address` (`Writer.offer`). The log stays held throughout.
+        ConnectionError if nothing is offered there, ValueError if the claim is not on this log."""
+        key, ticket = await asyncio.to_thread(handoff.take, address)
+        held = self._queue.held()
+        if held is None or held[0] != key:
+            ticket.close()
+            raise ValueError(f"the claim offered at {address} does not hold {self.ref}")
+        return Writer(self, key, held[1], ticket)
 
     def holder(self) -> Request | None:
         held = self._queue.held()

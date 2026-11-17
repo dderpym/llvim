@@ -8,6 +8,7 @@ def turns(state):                                  # a status renderer: the stat
     return f"{len(state.snapshot.messages)} messages"
 
 Status(renderers=[*BUILTIN, turns]).run()          # the log is the session's (env.log)
+Status(context=[void.CONTEXT]).run()               # what a voided message said is not reported
 ```
 
 | File | What it defines |

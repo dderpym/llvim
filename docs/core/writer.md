@@ -24,6 +24,9 @@ async with await log.claim(Request(0)) as writer:
   - while another commit of this Writer runs: raises `Committing`.
 - `outranked()`: `True` if someone waiting has a higher priority.
 - `outranked_changed()`, async: returns once `outranked()` may have changed since the last call. The first call returns at once.
+- `offer()`: an `Offer` of the log, still held, to another process ([handoff.md](handoff.md)). Give that process
+  `offer.address` and `await offer.taken(timeout)`. Once it is taken this Writer is released: the other process holds the same
+  claim, and what was uncommitted here is discarded. Not taken in time: `TimeoutError`, and this Writer still holds the log.
 - `release()`, or leaving `async with`: gives up the log and discards what is uncommitted. Releasing twice does nothing. A released Writer raises `Released` on any write or commit.
 
 ## Using it
@@ -48,4 +51,7 @@ async with await log.claim(Request(0)) as writer:
   ([queue.md](queue.md)) on `ticket.` files, made on the first call and kept until release, so a waiter that joins between two
   calls is not missed. Making it in the constructor was rejected: every Writer would hold an inotify descriptor and a thread whether
   it looks or not. A polling `outranked()` on a timer was rejected: it is late by the period and reads the queue's folder each time.
+- **A claim can change hands, not only be given up.** A program sometimes waits for the log for another: the input bar queues
+  for it, and the picker it then opens is a different process. Releasing for the other to claim lets whoever waits first take the
+  log in between. `offer` keeps the log held across the hand-over.
 - **Errors a caller handles have their own type.** `Moved` means claim again on top of the new head, `GitError` means fix the cause and commit again, `Committing` means wait for the running commit, and `Released` is a bug in the caller. Each is caught by its type, not by matching a message.

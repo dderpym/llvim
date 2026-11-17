@@ -1,6 +1,7 @@
 """llvim.core: the model. Everything a caller needs is importable from here."""
 
 from llvim.core.git import LLVIM, Author, Commit, GitError
+from llvim.core.handoff import Offer
 from llvim.core.live import Message, Snapshot
 from llvim.core.log import Log
 from llvim.core.queue import Request
@@ -15,6 +16,7 @@ __all__ = [
     "Log",
     "Message",
     "Moved",
+    "Offer",
     "Released",
     "Request",
     "Snapshot",

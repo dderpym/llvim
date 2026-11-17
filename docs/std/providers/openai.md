@@ -8,14 +8,15 @@ llvim-openai                    # answer the log "main" of the working folder, u
 llvim-openai alt -p ~/proj -m llama3 --base-url http://localhost:11434/v1
 ```
 
-- `OpenAI(model=None, base_url=None, log=None, timeout=60, retries=5, priority=0, once=False, tools=()).run()`: the program.
-  `tools` are offered to the model; `llvim-openai` offers bash unless given `--no-tools`. The model and URL
+- `OpenAI(model=None, base_url=None, log=None, timeout=60, retries=5, priority=0, once=False, tools=(), context=()).run()`: the program.
+  `tools` are offered to the model; `llvim-openai` offers bash unless given `--no-tools`. `context` is a list of
+  [context renderers](../context.md), applied to the log before it is sent. The model and URL
   default to the [settings](openai_settings.md), the log to the session's. No model anywhere: it exits saying so.
-- `serve(log, model, base_url, api_key, timeout, retries, priority, tools=())`, async: answers each `GENERATE` cue (`cues.receive`), until
+- `serve(log, model, base_url, api_key, timeout, retries, priority, tools=(), context=())`, async: answers each `GENERATE` cue (`cues.receive`), until
   cancelled.
-- `respond(log, model, base_url, api_key=None, timeout=60, priority=0, retries=5, backoff=1, tools=())`, async: answers if the model is cued now
+- `respond(log, model, base_url, api_key=None, timeout=60, priority=0, retries=5, backoff=1, tools=(), context=())`, async: answers if the model is cued now
   (`cues.take`); whether it wrote anything.
-- `answer(log, writer, model, base_url, api_key, timeout, retries, backoff, tools=())`, async: the answer itself, with the log held.
+- `answer(log, writer, model, base_url, api_key, timeout, retries, backoff, tools=(), context=())`, async: the answer itself, with the log held.
 - `chat(entries)`: the chat messages for a log.
 - `stream(base_url, api_key, model, messages, timeout, tools=None)`: the reply as `(tag, text, call)` pieces, `thinking`,
   `assistant` or `tool_call`. For a call the text is a piece of its arguments and `call` says which (`index`, `id`, `name`).
@@ -24,7 +25,8 @@ llvim-openai alt -p ~/proj -m llama3 --base-url http://localhost:11434/v1
 
 ## Using it
 
-- **What is sent:** the entries tagged `system`, `user` or `assistant`, with that role. Thinking goes back as the `reasoning_content`
+- **What is sent:** the log as the `context` renderers leave it (with `void.CONTEXT`, without voided messages). Of that, the
+  entries tagged `system`, `user` or `assistant`, with that role. Thinking goes back as the `reasoning_content`
   of the assistant message after it, for the turn in progress only (after the last user message). Cues, errors and anything else are
   left out. A tool call goes on the assistant message before it as `tool_calls`, followed by one `tool` message per call, holding
   its result wherever that is in the log, or `[no result: ...]` if it has none. A call the user made (`/bash`) is a user message

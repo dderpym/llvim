@@ -20,6 +20,8 @@ session out like a coding agent: the log on top, a status line, then a three-lin
 - The [tool runner](../std/tools/runner.md) runs in a window of its own. `TOOLS` is what the model is offered and the runner runs:
   bash, to start with. Add your own `Tool` values there ([registry.md](../std/tools/registry.md)). The viewer shows bash calls as
   live terminals, and the bar has `/bash`.
+- [Void](../std/void/void.md) is given to all four: the viewer hides voided messages, the provider leaves them out of what the
+  model is sent, the status line does not report them, and the bar has `/void`.
 
 ## Why it is this way
 

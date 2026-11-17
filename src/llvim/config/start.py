@@ -4,7 +4,7 @@ Each function is what runs in one pane: `llvim-run` imports this file again ther
 importing this file starts nothing; `start` lays the panes out, once, in the first pane. See docs/session.md.
 """
 
-from llvim.std import env
+from llvim.std import env, void
 from llvim.std.panels.input import STANDARD, Input
 from llvim.std.panels.logviewer import Viewer
 from llvim.std.panels.status import Status
@@ -16,15 +16,19 @@ TOOLS = [bash.TOOL]  # what the model is offered and the runner runs: add your o
 
 
 def viewer():
-    Viewer(renderers=[bash.BOX]).run()
+    Viewer(renderers=[void.BOX, bash.BOX]).run()  # void first: a voided bash call shows nothing
 
 
 def palette():
-    Input(commands=[*STANDARD, bash.COMMAND]).run()
+    Input(commands=[*STANDARD, bash.COMMAND, void.COMMAND]).run()
+
+
+def status():
+    Status(context=[void.CONTEXT]).run()
 
 
 def model():
-    OpenAI(tools=TOOLS).run()
+    OpenAI(tools=TOOLS, context=[void.CONTEXT]).run()
 
 
 def tools():
@@ -32,8 +36,10 @@ def tools():
 
 
 def start(s):
-    bar = s.split(s.here, below=5, run=palette, name="input")  # the bar's 3 rows, the status line above it, and a border
-    s.split(bar, above=1, run=Status, name="status")
+    bar = s.split(
+        s.here, below=5, run=palette, name="input"
+    )  # the bar's 3 rows, the status line above it, and a border
+    s.split(bar, above=1, run=status, name="status")
     bar.focus()
     if s.env.get("LLVIM_MODEL") or (env.home() / "openai.toml").exists():
         s.window(run=model)  # the provider, in the background, once it has a model

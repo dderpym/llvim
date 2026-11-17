@@ -125,6 +125,14 @@ async def test_the_tools_are_offered_and_a_streamed_call_is_a_message_of_its_own
     assert entries(fake_log.read())[3].extra == {"model": "m", "call_id": "call_1"}
 
 
+async def test_the_model_is_sent_the_log_as_the_context_renderers_leave_it(fake_log, endpoint):
+    server = endpoint("ok")
+    fake_log.say(["user"], "secret")
+    fake_log.ask("hello")
+    await respond(fake_log, server.url, context=[lambda log: [e for e in log if e.content != "secret"]])
+    assert server.requests[0]["body"]["messages"] == [{"role": "user", "content": "hello"}]
+
+
 async def test_with_no_tools_none_are_offered_and_a_reply_without_calls_cues_nobody(fake_log, endpoint):
     server = endpoint("hi")
     fake_log.ask("hello")

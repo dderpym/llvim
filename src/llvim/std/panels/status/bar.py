@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from llvim.core import Log, Request, Snapshot
-from llvim.std.conversation import Entry, Field, decode
+from llvim.std.context import ContextRenderer
+from llvim.std.context import render as render_context
+from llvim.std.conversation import Entry, Field, decode, entries
 from llvim.std.cues import is_cue
 from llvim.std.panels.keys import Key, Panes, Redirect
 from llvim.std.panels.logviewer.ansi import pad, width, wrap
@@ -21,7 +23,7 @@ TICK = 1.0  # seconds between redraws while the turn runs: the clock shows whole
 @dataclass(frozen=True)
 class State:
     snapshot: Snapshot
-    last: Entry | None  # the last message, decoded
+    last: Entry | None  # the last message of the conversation: of the log as the context renderers leave it
     holder: Request | None
     model: str | None  # the model of the last message that names one
     busy_since: float | None  # when the turn in progress began, on `now`'s clock; None when it is over
@@ -46,17 +48,22 @@ def last_model(snapshot: Snapshot) -> str | None:
 
 class StatusBar:
     def __init__(self, log: Log, screen: Any, renderers: Sequence[StatusRenderer], panes: Panes | None = None,
-                 clock: Callable[[], float] = time.monotonic):  # fmt: skip
-        self.log, self.screen, self.renderers, self.panes, self.clock = log, screen, list(renderers), panes or Panes(), clock
+                 clock: Callable[[], float] = time.monotonic, context: Sequence[ContextRenderer] = ()):  # fmt: skip
+        self.log, self.screen, self.renderers, self.panes, self.clock = (
+            log,
+            screen,
+            list(renderers),
+            panes or Panes(),
+            clock,
+        )
+        self.context = list(context)
+        self._last: tuple[Snapshot, Entry | None] | None = None
         self.busy_since: float | None = None
         self._snapshot: Snapshot | None = None
         self._model: tuple[Snapshot, str | None] | None = None
 
     def state(self, snapshot: Snapshot) -> State:
-        uncommitted = {m.id for m in snapshot.uncommitted}
-        last = snapshot.messages[-1] if snapshot.messages else None
-        fresh = last is not None and last.id in uncommitted
-        entry = decode(last, fresh, fresh) if last is not None else None
+        entry = self._last_entry(snapshot)
         holder, now = self.log.holder(), self.clock()
         busy = holder is not None or (entry is not None and is_cue(entry))
         if not busy:
@@ -66,6 +73,20 @@ class StatusBar:
         if self._model is None or self._model[0] is not snapshot:
             self._model = (snapshot, last_model(snapshot))
         return State(snapshot, entry, holder, self._model[1], self.busy_since, now)
+
+    def _last_entry(self, snapshot: Snapshot) -> Entry | None:
+        uncommitted = {m.id for m in snapshot.uncommitted}
+        last = snapshot.messages[-1] if snapshot.messages else None
+        if last is None:
+            return None
+        if last.id in uncommitted or not self.context:
+            # A message being written is what is happening, whatever a renderer makes of it, and it changes with every chunk:
+            # the whole log is not read for each.
+            return decode(last, last.id in uncommitted, last.id in uncommitted)
+        if self._last is None or self._last[0] is not snapshot:
+            conversation = render_context(entries(snapshot), self.context)
+            self._last = (snapshot, conversation[-1] if conversation else None)
+        return self._last[1]
 
     def line(self, snapshot: Snapshot, cols: int) -> str:
         """Each renderer updated with the state now, and their pieces in one line. A renderer that raises shows nothing."""

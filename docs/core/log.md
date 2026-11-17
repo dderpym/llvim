@@ -29,6 +29,9 @@ async for snapshot in log.changes():        # now, then after every change
   - Not your turn within `timeout` seconds: raises `TimeoutError`, and you leave the queue.
   - `timeout=0`: the log only if it is yours at once.
   - Cancelled: you leave the queue.
+- `adopt(address)`, async: the Writer of a claim another process offered there with `Writer.offer` ([handoff.md](handoff.md)).
+  The request is the one the claim was made with. Raises `ConnectionError` if nothing is offered there or the offer was
+  withdrawn, and `ValueError` if the claim holds another log.
 - `holder()`: the request of whoever holds the log, or `None`.
 - `queue()`: the holder's request first, then the waiters', in the order they will get the log.
 - `fork(name, at)`, async: a new log starting at `at` (default: the head). Raises `FileExistsError` if `name` already has commits, `ValueError` if there is nothing to start from, and `GitError` if git would not make the branch for another reason.

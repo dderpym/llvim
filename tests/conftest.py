@@ -91,6 +91,9 @@ class FakeWriter:
         """Who waits: those a test set, and those in `claim`."""
         return self._log.waiting + [request for _, request in self._log._waiters]
 
+    def offer(self) -> "FakeOffer":
+        return FakeOffer(self)
+
     def release(self) -> None:
         if not self._released:
             self._released = True
@@ -102,6 +105,25 @@ class FakeWriter:
 
     async def __aexit__(self, *exc) -> None:
         self.release()
+
+
+class FakeOffer:
+    """A FakeWriter's claim, offered: `FakeLog.adopt(offer.address)` takes it, and the log stays held."""
+
+    def __init__(self, writer: FakeWriter):
+        self.writer, self.address, self.adopted = writer, f"offer-{id(writer)}", False
+        writer._log.offers[self.address] = self
+
+    async def taken(self, timeout: float | None = None) -> None:
+        try:
+            async with asyncio.timeout(timeout):
+                while not self.adopted:
+                    await asyncio.sleep(0.001)
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        self.writer._log.offers.pop(self.address, None)
 
 
 class FakeLog:
@@ -120,6 +142,7 @@ class FakeLog:
         self.waiting: list[Request] = []  # set by a test: who waits, besides those in `claim`
         self._waiters: list[tuple[int, Request]] = []
         self.claims: list[Request] = []
+        self.offers: dict[str, FakeOffer] = {}
         self.authors: list = []
         self.version = 0  # raised by every change, which is how `changes` notices one
 
@@ -153,13 +176,25 @@ class FakeLog:
         self._waiters.append(ticket)
         try:
             async with asyncio.timeout(timeout):
-                while self._holder is not None or min(self._waiters, key=lambda w: (-w[1].priority, w[0])) is not ticket:
+                while (
+                    self._holder is not None or min(self._waiters, key=lambda w: (-w[1].priority, w[0])) is not ticket
+                ):
                     await asyncio.sleep(0.001)
         finally:
             self._waiters.remove(ticket)
         self._holder, self._live = request, dict(self._committed())
         self.version += 1
         return FakeWriter(self, request)
+
+    async def adopt(self, address: str) -> FakeWriter:
+        """As core's: the writer of the claim offered there, the giver's released without the log coming free."""
+        if address not in self.offers:
+            raise ConnectionError(f"no claim is offered at {address}")
+        offer = self.offers[address]
+        offer.writer._released, offer.adopted = True, True
+        self._live = dict(self._committed())
+        self.version += 1
+        return FakeWriter(self, offer.writer._request)
 
     def holder(self) -> Request | None:
         return self._holder
@@ -173,7 +208,9 @@ class FakeLog:
     def say(self, tags, content: str = "", **extra) -> int:
         """A committed message."""
         id = self._new_id()
-        self._commits.append((f"{len(self._commits) + 1:040x}", self._committed() | {id: encode(tags, content, **extra)}))
+        self._commits.append(
+            (f"{len(self._commits) + 1:040x}", self._committed() | {id: encode(tags, content, **extra)})
+        )
         self.version += 1
         return id
 

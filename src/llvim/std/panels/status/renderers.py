@@ -51,4 +51,3 @@ def model(state: State) -> str | None:
 
 
 BUILTIN = [activity, model]
-
