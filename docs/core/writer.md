@@ -21,7 +21,8 @@ async with await log.claim(Request(0)) as writer:
   - an empty log: a first commit, even with no writes;
   - something else moved the head: raises `Moved`. The head is untouched and the writes stay uncommitted;
   - git would not commit or move the head for another reason (a lock file left by a git that died, a full disk): raises `GitError` ([git.md](git.md)). The head is untouched, the writes stay uncommitted, and the commit can be tried again once the cause is gone;
-  - while another commit of this Writer runs: raises `Committing`.
+  - while another commit of this Writer runs: raises `Committing`;
+  - cancelled: waits for git to finish, keeps what it did, then raises `CancelledError`. If git made the commit, it is the head and the Writer goes on from it; if not, the writes stay uncommitted.
 - `outranked()`: `True` if someone waiting has a higher priority.
 - `outranked_changed()`, async: returns once `outranked()` may have changed since the last call. The first call returns at once.
 - `offer()`: an `Offer` of the log, still held, to another process ([handoff.md](handoff.md)). Give that process
@@ -44,6 +45,7 @@ async with await log.claim(Request(0)) as writer:
 - **Restore adds a commit, it does not reset.** The commits after `to` stay in history, so a restore can be undone by another restore. The next id is kept as the highest seen, so ids from the undone commits are not given out again.
 - **The Writer never touches git.** It keeps the state it is building (the messages, which ones changed since the last commit, and the bucket of each committed message) and hands a commit to `Log`, which has [git.py](git.md) write it. Git in one file means one place that knows the on-disk format.
 - **A commit costs the same however long the log is.** The Writer keeps the set of changed ids, so a commit compares nothing it did not change. It keeps the bucket of every message, so the log does not read the base commit's trees to find them.
+- **A cancelled commit finishes the git step.** Cancelling the wait does not stop git: an `update-ref` already running moves the head anyway. A Writer that gave up on it would not know the head moved, and every later commit would fail with `Moved`. So the commit waits for git, a few milliseconds, and records where the head ended. Killing git on cancel was rejected: the ref may already be moved by then, and the Writer would still have to find out which.
 - **Writes during a commit are carried over, not refused.** A provider streams in one task and commits in another, so refusing writes during the few milliseconds of a commit would make it stop and wait. The commit takes the changed ids when it starts. When it ends, the ids changed since then are written into the fresh journal as they stand against the new head, so readers never lose them.
 - **The Writer and readers apply the journal with the same code.** Both use `apply` from [live.py](live.md), so what readers show before a commit and what the commit holds cannot disagree.
 - **`outranked_changed` is a wait, not a callback.** A holder waits on it alongside its own work, with

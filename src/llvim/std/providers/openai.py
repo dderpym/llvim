@@ -58,7 +58,8 @@ def chat(log: list[Entry]) -> list[dict]:
 
     The API refuses an assistant message whose calls are not each followed at once by a `tool` message, so a result is found by
     its call id wherever it sits, and a call that has none gets NO_RESULT. A call the user made (`/bash`) is not the model's: it
-    is a user message saying what was run and what it printed, once it has a result."""
+    is a user message saying what was run and what it printed, once it has a result. A call whose arguments are not JSON was cut
+    off while it streamed; it is left out, since a server may refuse every request that carries it."""
     results = {call_id(e): e.content for e in log if kind(e) == RESULT}
     out: list[dict] = []
     open_calls: list[str | None] = []
@@ -86,6 +87,8 @@ def chat(log: list[Entry]) -> list[dict]:
                     {"role": "user", "content": f"I ran this in a terminal:\n$ {command}\n{results[call_id(entry)]}"}
                 )
                 reasoning.clear()
+        elif kind(entry) == CALL and not _whole(entry.content):
+            continue
         elif kind(entry) == CALL:
             if not open_calls and not (out and out[-1]["role"] == "assistant" and "tool_calls" not in out[-1]):
                 out.append({"role": "assistant", "content": None})
@@ -108,6 +111,14 @@ def chat(log: list[Entry]) -> list[dict]:
     for message in out[:last_user]:
         message.pop("reasoning_content", None)
     return out
+
+
+def _whole(arguments: str) -> bool:
+    try:
+        json.loads(arguments or "{}")
+    except ValueError:
+        return False
+    return True
 
 
 def _command_of(call: Entry) -> str:

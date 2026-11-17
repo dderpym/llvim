@@ -70,6 +70,16 @@ def test_a_call_with_no_result_is_still_answered_so_the_api_accepts_the_conversa
     assert sent[3]["role"] == "user"
 
 
+def test_a_call_cut_off_while_its_arguments_streamed_is_not_sent(entry):
+    sent = openai.chat([
+        entry(["user"], "go"), entry(["thinking"], "hm"), entry(["tool_call", "bash"], '{"command": "l', call_id="a"),
+        entry(["tool_result", "bash"], "stray", call_id="a"), entry(["user", "stop"], "stopped"), entry(["assistant"], "ok"),
+    ])  # fmt: skip
+    assert sent == [
+        {"role": "user", "content": "go"}, {"role": "user", "content": "stopped"}, {"role": "assistant", "content": "ok"}
+    ]  # fmt: skip
+
+
 def test_a_call_the_user_made_is_told_to_the_model_as_their_message_once_it_has_a_result(entry):
     mine = entry(["tool_call", "bash"], '{"command": "make", "interactive": true}', call_id="u", user=True)
     assert openai.chat([mine]) == []

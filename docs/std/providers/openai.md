@@ -29,7 +29,8 @@ llvim-openai alt -p ~/proj -m llama3 --base-url http://localhost:11434/v1
   entries tagged `system`, `user` or `assistant`, with that role. Thinking goes back as the `reasoning_content`
   of the assistant message after it, for the turn in progress only (after the last user message). Cues, errors and anything else are
   left out. A tool call goes on the assistant message before it as `tool_calls`, followed by one `tool` message per call, holding
-  its result wherever that is in the log, or `[no result: ...]` if it has none. A call the user made (`/bash`) is a user message
+  its result wherever that is in the log, or `[no result: ...]` if it has none. A call whose arguments are not JSON is left out,
+  with its result if it has one. A call the user made (`/bash`) is a user message
   instead, `I ran this in a terminal: $ <command>` and its output, once it has a result ([calls.md](../tools/calls.md)).
 - **What is written:** the reply as an `["assistant"]` message with a `model` field, streamed with `extend`. Reasoning the server
   streams (`reasoning_content`, or `reasoning`) is a `["thinking"]` message the same way; a new message starts each time the text
@@ -49,6 +50,10 @@ llvim-openai alt -p ~/proj -m llama3 --base-url http://localhost:11434/v1
   A call cut off by a stop, or by a runner that died, has none, so it is sent with a stand-in.
 - **A call cut short is not run.** Outranked mid-reply, the provider commits what arrived but does not cue the runner. Arguments
   that stopped halfway are not a call anyone asked for.
+- **A call whose arguments do not parse is not sent.** A stop that lands while the arguments stream leaves half of them in the
+  log, and they would go back to the server on every later request. A strict server refuses those requests, so the conversation
+  would stay broken until the user voids the call. Sending them with the arguments replaced by `{}` was rejected: that is a call
+  the model never made. The log keeps the call as it arrived, so what happened is still there to see.
 - **A `/bash` call is the user's message.** The model did not make it, and an assistant message with calls it never made would
   confuse it.
 

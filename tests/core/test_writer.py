@@ -267,3 +267,20 @@ async def test_a_commit_git_refuses_for_another_reason_is_not_moved_and_can_be_t
         assert log.read().uncommitted == (Message(1, b"b"),)
         stale.unlink()
         assert messages(log, await writer.commit()) == [Message(0, b"a"), Message(1, b"b")]
+
+
+async def test_a_cancelled_commit_still_leaves_the_writer_where_git_put_the_head(log):
+    async with await log.claim(Request(0)) as writer:
+        await writer.commit()
+        for step in range(1000):
+            writer.append(f"{step}".encode())
+            committing = asyncio.create_task(writer.commit())
+            await asyncio.sleep(step / 10_000)
+            committing.cancel()
+            await asyncio.gather(committing, return_exceptions=True)
+            await asyncio.sleep(0.005)  # a git the cancel left running would move the head by now
+            assert log.head() == writer._base, f"cancelled after {step / 10} ms, the writer lost track of the head"
+            if not committing.cancelled():
+                break  # the commit beat the cancel; waiting longer tests nothing new
+        await writer.commit()
+    assert messages(log) == [Message(id, f"{id}".encode()) for id in range(step + 1)]

@@ -1,5 +1,6 @@
 """core/writer.py: Writer, the only way to change a log."""
 
+import asyncio
 from typing import IO, TYPE_CHECKING
 
 from llvim.core.git import LLVIM, Author, Commit
@@ -72,7 +73,8 @@ class Writer:
     async def commit(self, *, author: Author = LLVIM, message: str = "") -> Commit:
         """Make the writes permanent, as `author`'s. Raises Moved, keeping the writes, if something else moved the
         head, and GitError, also keeping them, if git would not commit or move it for another reason.
-        Writes made while it runs are not in it; they stay uncommitted."""
+        Writes made while it runs are not in it; they stay uncommitted. Cancelled, it still waits for git to finish,
+        since git may move the head anyway, and the writer must know where it is."""
         self._check_held()
         if self._committing:
             raise Committing("a commit is being written")
@@ -80,22 +82,28 @@ class Writer:
             return self._base
         dirty, self._dirty, next_id = self._dirty, set(), self._next
         self._committing = True
-        try:
-            changes = {id: self._messages.get(id) for id in dirty}
-            commit = await self._log._commit(self._base, changes, next_id, self._where, author, message)
-        except BaseException:
-            self._dirty |= dirty
-            raise
-        finally:
-            self._committing = False
+        changes = {id: self._messages.get(id) for id in dirty}
+        git_step = asyncio.ensure_future(self._log._commit(self._base, changes, next_id, self._where, author, message))
+        cancelled = False
+        while not git_step.done():
+            try:
+                await asyncio.wait({git_step})
+            except asyncio.CancelledError:
+                cancelled = True
+        self._committing = False
+        commit = None if git_step.exception() else git_step.result()
         if commit is None:
             self._dirty |= dirty
-            raise Moved(f"{self._log.ref} is no longer at {self._base}")
-        self._base, self._saved_next = commit, next_id
-        if self._ticket is not None:
-            self._journal.close()
-            self._journal = self._start_journal()
-            self._rewrite_late_changes()
+        else:
+            self._base, self._saved_next = commit, next_id
+            if self._ticket is not None:
+                self._journal.close()
+                self._journal = self._start_journal()
+                self._rewrite_late_changes()
+        if cancelled:
+            raise asyncio.CancelledError
+        if commit is None:
+            raise git_step.exception() or Moved(f"{self._log.ref} is no longer at {self._base}")
         return commit
 
     def outranked(self) -> bool:
