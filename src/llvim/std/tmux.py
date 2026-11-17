@@ -216,10 +216,19 @@ class Embedded:
     def interrupt(self) -> None:
         self.control.run(f"send-keys -t {self.pane} C-c")
 
-    def transcript(self) -> str:
-        """Everything the program printed, history included, with lines that wrapped joined back and trailing spaces as the
-        program wrote them. Empty rows follow the last line, down to the bottom of the screen."""
-        return self.control.run(f"capture-pane -p -J -S - -t {self.pane}")
+    def value(self, name: str) -> str:
+        """A format variable of the pane: one of tmux's own (``cursor_y``, ``history_size``, ``alternate_on``) or a user option
+        (``@name``), which is "" when it is not set."""
+        return self.control.run(f"display-message -p -t {self.pane} '#{{{name}}}'").rstrip("\n")
+
+    def set_option(self, name: str, value: str) -> None:
+        self.control.run(f"set-option -p -t {self.pane} {name} {shlex.quote(value)}")
+
+    def transcript(self, start: int | None = None) -> str:
+        """What the program printed from row ``start`` (0 is the top of the screen, -1 the last row of history; None, all of
+        history) to the bottom of the screen, with lines that wrapped joined back and trailing spaces as the program wrote them.
+        Empty rows follow the last line, down to the bottom of the screen."""
+        return self.control.run(f"capture-pane -p -J -S {'-' if start is None else start} -t {self.pane}")
 
     def close(self) -> None:
         """End the program and its window, if this party started it."""

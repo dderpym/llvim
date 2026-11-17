@@ -1,4 +1,4 @@
-"""std/tools/bash/box.py: BOX, how a viewer shows a bash call: a live terminal while the command runs, and its output after."""
+"""std/tools/bash/box.py: BOX, how a viewer shows a bash or terminal call: a live terminal while it runs, and its output after."""
 
 from __future__ import annotations
 
@@ -10,10 +10,12 @@ from llvim.std.conversation import Entry
 from llvim.std.panels.logviewer.ansi import RESET, pad, width, wrap
 from llvim.std.panels.logviewer.box import Box, Host, Renderer
 from llvim.std.tmux import Embedded, Snapshot, TmuxError
+from llvim.std.tools.bash.shared import AGENT, OWNER, USER
 from llvim.std.tools.bash.terminal import CALL_OPTION
 from llvim.std.tools.calls import CALL, RESULT, START, by_user, call_id, kind, name
 
 GREY, CYAN, BLUE, RED, DIM = "\x1b[38;5;245m", "\x1b[1;36m", "\x1b[38;5;110m", "\x1b[38;5;203m", "\x1b[2m"
+YELLOW = "\x1b[1;33m"
 RESULT_ROWS = 20  # rows of a finished command's output that the box shows
 LIVE_ROWS = 14  # rows of a running command's terminal
 FRAME = 0.03  # seconds between looks at the terminal
@@ -21,6 +23,7 @@ SEARCH = (
     0.2  # seconds between looks for the terminal of a call, which the runner starts a moment after the call is written
 )
 GIVE_UP = 10.0  # after this long without finding it, look only every few seconds (the runner may not be running)
+HAND_BACK = b"\x07"  # ctrl-g, in a terminal the model gave the user: give it back
 
 
 class BashBox(Box):
@@ -31,6 +34,8 @@ class BashBox(Box):
         self.snapshot: Snapshot | None = None
         self.focused = False
         self.unavailable = False  # the pane could not be shown (not in tmux, or it was gone)
+        self.owner = ""  # who may type, in a terminal kept open (shared.OWNER); "" in one that is not
+        self._asked_for_focus = False
         self._watching = False
         self._read(messages)
         host.on_messages(self, self.on_messages)
@@ -62,7 +67,26 @@ class BashBox(Box):
             return {}
 
     @property
+    def turn(self) -> bool:
+        """A call of the terminal tool that takes a turn at a terminal an earlier call started (not one that starts it)."""
+        return self.call is not None and name(self.call) == "terminal" and not self.arguments().get("command")
+
+    @property
+    def pane_tag(self) -> str | None:
+        """The call id the terminal is tagged with: this call's, or for a turn, that of the call that started it."""
+        return str(self.arguments().get("id") or "") if self.turn else call_id(self.call) if self.call else None
+
+    @property
     def command(self) -> str:
+        if self.turn:
+            arguments = self.arguments()
+            if arguments.get("close"):
+                return "close the terminal"
+            if arguments.get("give_to_user"):
+                return f"your turn: {arguments['give_to_user']}"
+            if arguments.get("keys"):
+                return "type " + json.dumps(arguments["keys"], ensure_ascii=False)
+            return "look at the terminal"
         return str(self.arguments().get("command") or (self.call.content if self.call else "") or "")
 
     @property
@@ -71,17 +95,13 @@ class BashBox(Box):
 
     @property
     def focusable(self) -> bool:
-        """The user may type into it: it is running, it asked for that, and we can see it."""
-        return self.live is not None and self.interactive and not (self.snapshot and self.snapshot.dead)
+        """The user may type into it: it is running, we can see it, and it is theirs: the call asked for that, or the model
+        handed a kept terminal to them."""
+        mine = self.owner == USER or (self.interactive and self.owner == "")
+        return self.live is not None and mine and not (self.snapshot and self.snapshot.dead)
 
     def _watch(self) -> None:
-        if (
-            self.host.live
-            and not self._watching
-            and self.call is not None
-            and self.result is None
-            and call_id(self.call)
-        ):
+        if self.host.live and not self._watching and self.call is not None and self.result is None and self.pane_tag:
             self._watching = True
             self.host.start(self.update)
 
@@ -91,7 +111,7 @@ class BashBox(Box):
         try:
             while self.live is None and not self.closed.is_set() and self.result is None:
                 self.live = Embedded.find(
-                    self.host.control(), CALL_OPTION, call_id(self.call), max(self.host.cols - 4, 10), LIVE_ROWS
+                    self.host.control(), CALL_OPTION, self.pane_tag, max(self.host.cols - 4, 10), LIVE_ROWS
                 )
                 if self.live is None:  # the runner starts it a moment after the call is written
                     self.closed.wait(SEARCH if time.monotonic() - started < GIVE_UP else 2.0)
@@ -101,8 +121,6 @@ class BashBox(Box):
             return
         if self.live is None:
             return
-        if by_user(self.call) and self.focusable:
-            self.host.request_focus(self)  # the user opened it themselves (/bash): they want to type in it now
         try:
             while not self.closed.is_set() and self.result is None:
                 live = self.live
@@ -111,16 +129,23 @@ class BashBox(Box):
                 columns = max(self.host.cols - 4, 10)
                 if columns != live.columns:
                     live.resize(columns, LIVE_ROWS)
-                shot = live.snapshot()
-                if shot != self.snapshot:
-                    self.snapshot = shot
+                shot, owner = live.snapshot(), live.value(OWNER)
+                if (shot, owner) != (self.snapshot, self.owner):
+                    self.snapshot, self.owner = shot, owner
                     self.changed()
+                self._ask_for_focus()
                 self.closed.wait(FRAME)
         except TmuxError:  # the runner has closed it: the result is on its way
             pass
         finally:
             self.live, self.focused = None, False
             self.changed()
+
+    def _ask_for_focus(self) -> None:
+        """Once, when the user is wanted: they opened it themselves (/bash), or the model handed them its terminal."""
+        if not self._asked_for_focus and self.focusable and (by_user(self.call) or self.owner == USER):
+            self._asked_for_focus = True
+            self.host.request_focus(self)
 
     def set_focus(self, focused: bool) -> None:
         self.focused = focused
@@ -129,7 +154,12 @@ class BashBox(Box):
     def key(self, raw: bytes) -> None:
         if (live := self.live) is not None:  # read once: ``update`` drops it, on its own thread, when the command ends
             try:
-                live.send(raw)
+                if raw == HAND_BACK and self.owner == USER:
+                    live.set_option(OWNER, AGENT)
+                    self.owner = AGENT  # not focusable from now: the viewer takes the keyboard back
+                    self.changed()
+                else:
+                    live.send(raw)
             except TmuxError:
                 pass
 
@@ -148,11 +178,18 @@ class BashBox(Box):
                 self.result.extra.get("error") or self.result.content.rstrip().split("\n")[-1].startswith("[exit code")
             )
         )
-        colour = CYAN if self.focused else BLUE if self.live is not None else RED if failed else GREY
-        head = f"╭─ $ {self.command.split(chr(10))[0]} "
+        users_turn = self.live is not None and self.owner == USER
+        if self.focused or users_turn:
+            colour = CYAN if self.focused else YELLOW
+        else:
+            colour = BLUE if self.live is not None else RED if failed else GREY
+        head = f"╭─ {'⇄' if self.turn else '$'} {self.command.split(chr(10))[0]} "
         if width(head) > cols - 3:  # a long command is cut, not wrapped
             head = wrap(head, max(cols - 5, 1))[0].rstrip() + "… "
-        hint = " ctrl-] or click outside to leave " if self.focused else " click to type " if self.focusable else ""
+        if self.focused:
+            hint = " ctrl-g hands it back · ctrl-] leaves " if users_turn else " ctrl-] or click outside to leave "
+        else:
+            hint = " your turn: click to type " if users_turn else " click to type " if self.focusable else ""
         foot = "╰" + hint + "─" * max(cols - 2 - len(hint), 0) + "╯"
         edge = f"{colour}│{RESET}"
         top = f"{colour}{head}{'─' * max(cols - width(head) - 1, 0)}╮{RESET}"
@@ -177,15 +214,15 @@ class BashBox(Box):
         """The plain version: the command, and its output if it is done. Also what a single message of the box prints."""
         out = ""
         if self.call:
-            out += f"$ {self.command}\n"
+            out += f"{'⇄' if self.turn else '$'} {self.command}\n"
         if self.result is not None:
             out += f"{self.result.content}\n\n"
         return out
 
 
 def claim(m: Entry) -> Hashable | None:
-    """The call, start and result of one bash call go to one box."""
-    return call_id(m) if name(m) == "bash" and kind(m) in (CALL, START, RESULT) else None
+    """The call, start and result of one bash or terminal call go to one box."""
+    return call_id(m) if name(m) in ("bash", "terminal") and kind(m) in (CALL, START, RESULT) else None
 
 
 BOX = Renderer(claim, BashBox, "bash")

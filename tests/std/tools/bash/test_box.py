@@ -1,4 +1,5 @@
-"""std/tools/bash/box.py: how a bash call looks, live while it runs and as its output after. The terminal is a stub."""
+"""std/tools/bash/box.py: how a bash or terminal call looks, live while it runs and as its output after. The terminal is a
+stub."""
 
 import json
 import threading
@@ -21,6 +22,7 @@ class FakeEmbedded:
     made: ClassVar[list] = []
     looked: ClassVar[list] = []
     hidden = False
+    options: ClassVar[dict] = {}  # the pane options, which every view of the one pane shares
 
     def __init__(self, columns, rows):
         self.columns, self.rows, self.sent, self.resized = columns, rows, [], []
@@ -41,6 +43,12 @@ class FakeEmbedded:
 
     def send(self, raw):
         self.sent.append(raw)
+
+    def value(self, name):
+        return self.options.get(name, "")
+
+    def set_option(self, name, value):
+        self.options[name] = value
 
     def resize(self, columns, rows):
         self.columns, self.rows = columns, rows
@@ -67,7 +75,7 @@ class LiveHost(Host):
 
 @pytest.fixture(autouse=True)
 def fake_terminals(monkeypatch):
-    FakeEmbedded.made, FakeEmbedded.looked, FakeEmbedded.hidden = [], [], False
+    FakeEmbedded.made, FakeEmbedded.looked, FakeEmbedded.hidden, FakeEmbedded.options = [], [], False, {}
     monkeypatch.setattr(bash_box, "Embedded", FakeEmbedded)
 
 
@@ -78,6 +86,10 @@ def CALL(entry, interactive=False, user=False):
 
 def RESULT(entry, text="done\n", error=False):
     return entry(["tool_result", "bash"], text, call_id="1", error=error)
+
+
+def TURN(entry, **arguments):
+    return entry(["tool_call", "terminal"], json.dumps({"id": "1", **arguments}), call_id="2")
 
 
 def wait_for(check, seconds=3):
@@ -96,6 +108,7 @@ def test_a_calls_messages_go_to_one_box_and_other_tools_and_messages_to_none(ent
     ]  # fmt: skip
     ((_, grouped),) = group(messages, [BOX]).values()
     assert [m.tags[0] for m in grouped] == ["tool_call", "tool_start", "tool_result"]
+    assert len(group([CALL(entry), TURN(entry, keys="y")], [BOX])) == 2  # a turn at its terminal is a box of its own
 
 
 def test_a_call_nobody_has_picked_up_says_it_is_waiting(entry, stub_host):
@@ -185,3 +198,60 @@ def test_it_looks_for_the_terminal_of_its_call_until_the_runner_has_started_it(e
     FakeEmbedded.hidden = False
     wait_for(lambda: box.live is not None)
     box.close()
+
+
+def test_a_turn_at_a_kept_terminal_shows_the_terminal_its_bash_call_started_and_says_what_it_does(entry, stub_host):
+    titles = {
+        "type \"y\\n\"": {"keys": "y\n"},
+        "your turn: type your password": {"give_to_user": "type your password"},
+        "close the terminal": {"close": True},
+        "look at the terminal": {},
+    }
+    for title, arguments in titles.items():
+        assert strip(BashBox(stub_host, [TURN(entry, **arguments)]).rows(60)[0]).startswith(f"╭─ ⇄ {title} "), title
+    host = LiveHost()
+    box = BashBox(host, [TURN(entry, keys="y")])
+    wait_for(lambda: box.live is not None)
+    assert FakeEmbedded.looked == [("@llvim_call", "1")]  # the id of the call that started it, not its own
+    box.close()
+
+
+def test_a_call_that_starts_a_terminal_shows_its_own_and_is_titled_by_its_command(entry):
+    host = LiveHost()
+    box = BashBox(host, [entry(["tool_call", "terminal"], json.dumps({"command": "python3"}), call_id="2")])
+    wait_for(lambda: box.live is not None)
+    assert FakeEmbedded.looked == [("@llvim_call", "2")] and strip(box.rows(60)[0]).startswith("╭─ $ python3 ")
+    box.close()
+
+
+def test_a_kept_terminal_is_the_users_to_type_into_only_while_the_model_has_handed_it_to_them(entry):
+    asked = []
+    host = LiveHost()
+    host.request_focus = asked.append
+    FakeEmbedded.options["@llvim_owner"] = "agent"
+    box = BashBox(host, [TURN(entry, keys="y")])
+    wait_for(lambda: box.live is not None and box.owner == "agent")
+    assert not box.focusable and not asked
+    FakeEmbedded.options["@llvim_owner"] = "user"
+    wait_for(lambda: asked == [box])
+    assert box.focusable and "your turn: click to type" in strip(box.rows(60)[-1])
+    box.close()
+
+
+def test_ctrl_g_hands_the_users_turn_back_and_is_otherwise_a_key_like_any_other(entry):
+    host = LiveHost()
+    FakeEmbedded.options["@llvim_owner"] = "user"
+    box = BashBox(host, [TURN(entry, give_to_user="type your password")])
+    wait_for(lambda: box.owner == "user")
+    box.set_focus(True)
+    assert "ctrl-g hands it back" in strip(box.rows(60)[-1])
+    box.key(b"hunter2\r")
+    box.key(b"\x07")
+    assert FakeEmbedded.options["@llvim_owner"] == "agent" and not box.focusable and box.live.sent == [b"hunter2\r"]
+    box.close()
+    plain = BashBox(LiveHost(), [CALL(entry, interactive=True)])
+    FakeEmbedded.options.clear()
+    wait_for(lambda: plain.live is not None)
+    plain.key(b"\x07")
+    assert plain.live.sent == [b"\x07"] and "@llvim_owner" not in FakeEmbedded.options
+    plain.close()

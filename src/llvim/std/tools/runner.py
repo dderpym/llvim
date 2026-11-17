@@ -132,4 +132,4 @@ def main(argv: list[str] | None = None) -> None:
     )
     ap.add_argument("--once", action="store_true", help="answer the calls if the tools are cued now, then exit")
     args = ap.parse_args(argv)
-    Runner([bash.TOOL], Log(args.project, args.log), args.once).run()
+    Runner([bash.TOOL, bash.TERMINAL], Log(args.project, args.log), args.once).run()

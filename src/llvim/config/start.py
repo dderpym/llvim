@@ -12,7 +12,7 @@ from llvim.std.providers.openai import OpenAI
 from llvim.std.tools import bash
 from llvim.std.tools.runner import Runner
 
-TOOLS = [bash.TOOL]  # what the model is offered and the runner runs: add your own Tool values here
+TOOLS = [bash.TOOL, bash.TERMINAL]  # what the model is offered and the runner runs: add your own Tool values here
 
 
 def viewer():

@@ -7,6 +7,8 @@ from llvim.std import env
 
 DEFAULTS = {
     "timeout": 120.0,  # seconds before a command is stopped
+    "settle": 1.5,  # seconds a kept terminal's screen must be still before the model is shown it
+    "user_timeout": 3600.0,  # seconds a kept terminal stays the user's before the model gets it back, if they never hand it back
     "max_lines": 2000,  # the most output the model is given; more is saved to a file instead
     "max_bytes": 50_000,
     "long_line_bytes": 10_000,  # a line at least this long is pointed out (0: none is), by number, so the model does not grep it blind

@@ -9,7 +9,7 @@ llvim-openai alt -p ~/proj -m llama3 --base-url http://localhost:11434/v1
 ```
 
 - `OpenAI(model=None, base_url=None, log=None, timeout=60, retries=5, priority=0, once=False, tools=(), context=()).run()`: the program.
-  `tools` are offered to the model; `llvim-openai` offers bash unless given `--no-tools`. `context` is a list of
+  `tools` are offered to the model; `llvim-openai` offers bash and terminal unless given `--no-tools`. `context` is a list of
   [context renderers](../context.md), applied to the log before it is sent. The model and URL
   default to the [settings](openai_settings.md), the log to the session's. No model anywhere: it exits saying so.
 - `serve(log, model, base_url, api_key, timeout, retries, priority, tools=(), context=())`, async: answers each `GENERATE` cue (`cues.receive`), until

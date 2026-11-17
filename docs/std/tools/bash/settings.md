@@ -11,6 +11,8 @@ timeout = 300
 | Name | Default | What |
 |---|---|---|
 | `timeout` | 120 | seconds before a command is stopped, when the model gives none |
+| `settle` | 1.5 | seconds a [kept terminal](shared.md)'s screen must be still before the model is shown it |
+| `user_timeout` | 3600 | seconds a kept terminal stays the user's if they never hand it back |
 | `max_lines` | 2000 | the most lines the model is given whole; more go to a file |
 | `max_bytes` | 50,000 | the same, in bytes |
 | `long_line_bytes` | 10,000 | a line at least this long is pointed out in the note (0: none is) |

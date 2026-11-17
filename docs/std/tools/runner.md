@@ -4,14 +4,14 @@ The runner answers the tool calls a provider left in the log. On a `tools` cue i
 start, runs the call through the [registry](registry.md), and writes the result. With the last result it cues the model.
 
 ```
-llvim-tools                     # answer the calls in the log "main" of the working folder, with bash, until interrupted
+llvim-tools                     # answer the calls in the log "main" of the working folder, with bash and terminal, until interrupted
 llvim-tools alt -p ~/proj --once
 ```
 ```python
 Runner(tools=[bash.TOOL, mine]).run()       # in a start script; the log is the session's
 ```
 
-- `Runner(tools=(), log=None, once=False).run()`: the program. `llvim-tools` runs it with bash.
+- `Runner(tools=(), log=None, once=False).run()`: the program. `llvim-tools` runs it with bash and terminal.
 - `serve(log, registry)`, async: first `recover`, then each `tools` cue (`cues.receive`), until cancelled.
 - `respond(log, registry)`, async: answers if the tools are cued now; how many calls it answered.
 - `recover(log, registry)`, async: answers the calls a dead runner left cut off, if any, and then the rest of that turn.

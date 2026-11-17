@@ -1,14 +1,15 @@
 """std/tools/bash/tool.py: TOOL, the bash tool: run a shell command in the project folder, in a terminal the user watches, and
-return what it printed, shaped for the model."""
+return what it printed, shaped for the model; and TERMINAL, a terminal kept open that the model and the user take turns at."""
 
 import os
 import signal
 import statistics
 import tempfile
 import time
+import uuid
 
 from llvim.std.tmux import TmuxError
-from llvim.std.tools.bash import terminal
+from llvim.std.tools.bash import shared, terminal
 from llvim.std.tools.bash.settings import setting
 from llvim.std.tools.calls import call_id
 from llvim.std.tools.registry import Context, Tool, ToolError
@@ -27,6 +28,32 @@ PARAMETERS = {
         },
     },
     "required": ["command"],
+}
+
+TERMINAL_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "command": {
+            "type": "string",
+            "description": "Start this bash command on a new terminal, whose id is this call's id. Leave out id.",
+        },
+        "id": {"type": "string", "description": "The terminal to take a turn at, from the call that started it."},
+        "keys": {
+            "type": "string",
+            "description": "Text to type. A newline is Enter. Control keys as JSON escapes: \\u0003 is ctrl-c, \\u0004 ctrl-d, "
+            "\\u001b escape.",
+        },
+        "give_to_user": {
+            "type": "string",
+            "description": 'Hand the keyboard to the user, saying what they need to do ("type your sudo password"). Use it for '
+            "what only they should type: passwords, passphrases, choices that are theirs. Waits until they hand it back.",
+        },
+        "close": {"type": "boolean", "description": "Stop the program (ctrl-c, then kill) and close the terminal."},
+        "timeout": {
+            "type": "number",
+            "description": "Seconds to wait for the screen to be still. Leave it out for the default. Nothing is stopped when it runs out.",
+        },
+    },
 }
 
 
@@ -133,6 +160,25 @@ def finish(
     return output if code == 0 else f"{output.rstrip(chr(10))}\n[{ended(code)}{took(seconds, ' after ')}]"
 
 
+def told(seen: shared.Seen, id: str, waited: float, handing: bool = False) -> str:
+    """What the model is told of a look at a kept terminal: what is new, then how the look ended and whether it still runs."""
+    output = shown(seen.output) if seen.output else "(nothing new)"
+    if not seen.running:
+        how = "stopped" if seen.status is None else ended(seen.status)
+        return f"{output}\n[{how}; the terminal is closed]"
+    if seen.cancelled:
+        raise ToolError(f"{output}\n[interrupted; still running in terminal {id}]")
+    if seen.handed_back:
+        how = "the user handed it back. "
+    elif handing:
+        how = f"the user did not hand it back within {waited:g}s; it is yours again. "
+    elif seen.still_changing:
+        how = f"still printing after {waited:g}s. "
+    else:
+        how = ""
+    return f"{output}\n[{how}running in terminal {id}: use the terminal tool to type, look again, give it to the user, or close it]"
+
+
 async def bash(arguments: dict, ctx: Context) -> str:
     timeout = float(arguments.get("timeout") or setting("timeout"))
     started = time.monotonic()
@@ -151,11 +197,60 @@ async def bash(arguments: dict, ctx: Context) -> str:
 
 TOOL = Tool(
     "bash",
-    "Run a bash command in the project directory, in a terminal the user watches. Returns what it wrote, stdout and stderr "
-    "together in the order written, byte for byte (tabs, trailing spaces, carriage returns and escape codes are kept), and the "
-    "exit code if it failed. Its stdout is not a terminal and its input is closed, so most programs print plain text, without "
-    "colour or progress bars. An interactive command runs on the terminal instead, and you get its screen as the user saw it: "
-    "escape codes and carriage returns are applied and gone. Output too large to return is saved to a file and you are told where.",
+    "Run a command in the project directory, in a terminal the user watches. Returns stdout and stderr together, verbatim "
+    "(escape codes kept), plus exit code if it failed. stdin is closed and stdout is not a tty — prompting commands fail; use "
+    "terminal instead. Large output goes to a file and you're told where. timeout stops it. interactive runs it on the real "
+    "terminal for things only the user should type.",
     PARAMETERS,
     bash,
+)
+
+
+async def take_turn(arguments: dict, ctx: Context) -> str:
+    asked = [a for a in ("command", "keys", "give_to_user", "close") if arguments.get(a) not in (None, False)]
+    if len(asked) > 1:
+        raise ToolError(f"one of command, keys, give_to_user and close per call, not {' and '.join(asked)}")
+    if "command" in asked:
+        return await start(arguments, ctx)
+    if not arguments.get("id"):
+        raise ToolError("give a command to start a terminal, or the id of one to take a turn at")
+    id = arguments["id"]
+    try:
+        if arguments.get("close"):
+            return told(await shared.close(id), id, 0)
+        if arguments.get("give_to_user"):
+            waited = setting("user_timeout")
+            return told(await shared.hand_to_user(id, waited), id, waited, handing=True)
+        waited = float(arguments.get("timeout") or setting("timeout"))
+        return told(await shared.type_keys(id, arguments.get("keys") or "", waited, setting("settle")), id, waited)
+    except shared.Closed as e:
+        raise ToolError(str(e)) from None
+
+
+async def start(arguments: dict, ctx: Context) -> str:
+    id = (ctx.call and call_id(ctx.call)) or f"term_{uuid.uuid4().hex[:12]}"
+    waited = float(arguments.get("timeout") or setting("timeout"))
+    try:
+        seen = await shared.start(arguments["command"], ctx.cwd, id, waited, setting("settle"))
+    except TmuxError as e:
+        raise ToolError(f"terminal needs a tmux terminal, and could not get one: {e}") from None
+    return told(seen, id, waited)
+
+
+TERMINAL = Tool(
+    "terminal",
+    "A terminal that stays open between calls, for programs you type into: REPLs, ssh, installers that ask questions, "
+    "password prompts. For a command that just runs and exits, use bash.\n"
+    '1. Start: {"command": "python3"}. Returns the screen once it is still, and the terminal\'s id.\n'
+    '2. Type: {"id": ..., "keys": "print(1)\\n"}. A newline is Enter, \\u0003 is ctrl-c. Returns what is new, from the line '
+    "the cursor was on; a full-screen program (vim, top) gives its whole screen. With no keys it waits and looks again: use "
+    "that while a program is still working.\n"
+    '3. Hand over: {"id": ..., "give_to_user": "type your sudo password"} for what is the user\'s to type: passwords, '
+    "passphrases, choices only they should make. Never ask them for a password in chat. You see nothing while they have it; "
+    "the call returns when they hand it back (or after an hour), with what happened.\n"
+    '4. Close: {"id": ..., "close": true} when done: ctrl-c, then kill. A program that exits closes its terminal itself.\n'
+    "State persists between calls: variables, cwd, running programs. One of command, keys, give_to_user or close per call. "
+    "timeout limits the wait; it never stops the program.",
+    TERMINAL_PARAMETERS,
+    take_turn,
 )

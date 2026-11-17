@@ -74,6 +74,28 @@ def test_a_program_that_exits_leaves_its_screen_its_status_and_a_full_transcript
     term.close()  # closing twice is fine
 
 
+def test_a_transcript_can_start_at_any_row_of_the_screen_or_its_history(control, tmp_path):
+    term = Embedded.start(control, "seq 1 12", str(tmp_path), 30, 5)
+    while not term.snapshot().dead:
+        time.sleep(0.02)
+    assert term.value("history_size") == "8"  # 12 lines and the row under them, on a screen of 5
+    assert tidy(term.transcript(0)).split("\n") == ["9", "10", "11", "12"]
+    assert tidy(term.transcript(-2)).split("\n") == ["7", "8", "9", "10", "11", "12"]
+    term.close()
+
+
+def test_a_pane_option_set_by_one_party_is_read_by_another_and_one_not_set_is_empty(control, tmux_server, tmp_path):
+    term = Embedded.start(control, "sleep 30", str(tmp_path), 60, 10, {"@llvim_owner": "agent"})
+    other = Control(["-S", tmux_server[1]], "s")
+    try:
+        looker = Embedded.attach(other, term.pane, 50, 8)
+        looker.set_option("@llvim_owner", "the user's")
+        assert term.value("@llvim_owner") == "the user's" and term.value("@llvim_nothing") == ""
+    finally:
+        other.close()
+    term.close()
+
+
 def test_a_second_party_can_attach_type_and_leave_without_ending_the_program(control, tmux_server, tmp_path):
     starter = Embedded.start(control, "bash --norc", str(tmp_path), 60, 10)
     at_prompt(starter)

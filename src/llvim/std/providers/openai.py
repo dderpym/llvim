@@ -485,12 +485,12 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--retries", type=int, default=5, help="tries again after a failed connection (default: 5)")
     ap.add_argument("--priority", type=int, default=0, help="how this provider ranks when others want the log")
     ap.add_argument("--once", action="store_true", help="answer if there is something to answer, then exit")
-    ap.add_argument("--no-tools", action="store_true", help="offer the model no tools (default: bash)")
+    ap.add_argument("--no-tools", action="store_true", help="offer the model no tools (default: bash and terminal)")
     args = ap.parse_args(argv)
     if args.configure:
         return configure()
     from llvim.std.tools import bash
 
     log = Log(args.project, args.log)
-    tools = [] if args.no_tools else [bash.TOOL]
+    tools = [] if args.no_tools else [bash.TOOL, bash.TERMINAL]
     OpenAI(args.model, args.base_url, log, args.timeout, args.retries, args.priority, args.once, tools).run()

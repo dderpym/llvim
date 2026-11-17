@@ -17,7 +17,7 @@ def test_a_bash_number_comes_from_the_environment_then_bash_toml_then_the_defaul
     (tmp_path / "home").mkdir()
     (tmp_path / "home" / "bash.toml").write_text("max_lines = 10\npreview_chars = 0\n")
     assert setting("max_lines") == 10 and setting("preview_chars") == 0
-    assert setting("max_bytes") == 50_000
+    assert setting("max_bytes") == 50_000 and setting("settle") == 1.5 and setting("user_timeout") == 3600
     monkeypatch.setenv("LLVIM_BASH_MAX_LINES", "20")
     assert setting("max_lines") == 20
 

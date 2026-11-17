@@ -20,7 +20,11 @@ term.close()
 - `Embedded.attach(control, pane, columns, rows)`: looks at a program someone else started. A pane that is gone: `TmuxError`.
   `Embedded.find(control, option, value, columns, rows)`: attaches to the pane whose option has that value, or `None`.
 - `snapshot()`: `lines` (with colour codes), `cursor` (`None` when hidden or done), `dead`, `status` (once dead).
-- `send(raw)`, `interrupt()`, `resize(columns, rows)`, `transcript()` (everything printed, history included, wrapped lines joined).
+- `send(raw)`, `interrupt()`, `resize(columns, rows)`.
+- `transcript(start=None)`: what was printed from row `start` down (0 is the top of the screen, negative rows are history; `None`,
+  all of history), wrapped lines joined.
+- `value(name)`: a format variable of the pane, tmux's own (`history_size`, `cursor_y`) or a user option (`@name`, `""` when not
+  set). `set_option(name, value)` sets a user option.
 - `close()`: ends the program and its window if this party started it; for one that attached, nothing. Twice is fine.
 
 ## Using it
@@ -41,4 +45,4 @@ term.close()
   stays and tmux draws no "Pane is dead" note over it. `remain-on-exit` was rejected: tmux scrolls the screen into history and
   prints the note.
 - **Panes are found by their options.** Tagging a pane before its program starts means nothing about it is written anywhere but
-  tmux.
+  tmux. The same options carry state two programs share about a pane (who may type into it), for the same reason.

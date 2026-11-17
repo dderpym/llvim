@@ -83,6 +83,7 @@ One page per source file, explaining why it is shaped the way it is:
     - [`std/tools/bash/`](docs/std/tools/bash/bash.md)
       - [`std/tools/bash/tool.py`](docs/std/tools/bash/tool.md)
       - [`std/tools/bash/terminal.py`](docs/std/tools/bash/terminal.md)
+      - [`std/tools/bash/shared.py`](docs/std/tools/bash/shared.md)
       - [`std/tools/bash/settings.py`](docs/std/tools/bash/settings.md)
       - [`std/tools/bash/box.py`](docs/std/tools/bash/box.md)
       - [`std/tools/bash/command.py`](docs/std/tools/bash/command.md)

@@ -1,5 +1,5 @@
-"""std/tools/bash/tool.py: the bash tool: what the model is told of a command's run. The terminal is a stub; the real one is
-tested in test_terminal.py."""
+"""std/tools/bash/tool.py: the bash and terminal tools: what the model is told of a command's run, and of each turn at a terminal
+kept open. The terminals are stubs; the real ones are tested in test_terminal.py and test_shared.py."""
 
 import asyncio
 import re
@@ -10,10 +10,10 @@ import pytest
 from llvim.std.conversation import Entry
 from llvim.std.tmux import TmuxError
 from llvim.std.tools import Context, Registry
-from llvim.std.tools.bash import TOOL, terminal
+from llvim.std.tools.bash import TERMINAL, TOOL, shared, terminal
 from llvim.std.tools.bash.terminal import Ran
 
-REGISTRY = Registry([TOOL])
+REGISTRY = Registry([TOOL, TERMINAL])
 CALL = Entry(0, ["tool_call", "bash"], "{}", {"call_id": "c1"})
 
 
@@ -175,3 +175,101 @@ def test_outside_tmux_the_call_fails_and_says_why(monkeypatch):
     monkeypatch.setattr(terminal, "run", no_tmux)
     result = asyncio.run(REGISTRY.run("bash", {"command": "ls"}, Context(call=CALL)))
     assert result.error and "not running inside tmux" in result.text
+
+
+class FakeShared:
+    """What ``shared`` is to the tools: each function records how it was asked and answers with ``seen``, or raises it."""
+
+    def __init__(self, seen):
+        self.seen, self.asked = seen, []
+
+    def answer(self, *asked):
+        self.asked.append(asked)
+        if isinstance(self.seen, Exception):
+            raise self.seen
+        return self.seen
+
+    async def start(self, command, cwd, id, timeout, settle):
+        return self.answer("start", command, id, timeout, settle)
+
+    async def type_keys(self, id, keys, timeout, settle):
+        return self.answer("type_keys", id, keys, timeout, settle)
+
+    async def hand_to_user(self, id, timeout):
+        return self.answer("hand_to_user", id, timeout)
+
+    async def close(self, id):
+        return self.answer("close", id)
+
+
+@pytest.fixture
+def turn(monkeypatch, tmp_path):
+    """`turn(seen, tool, **arguments)`: the result of a call when the kept terminal answers `seen`, and how it was asked."""
+
+    def run(seen, tool="terminal", **arguments):
+        fake = FakeShared(seen)
+        for name in ("start", "type_keys", "hand_to_user", "close"):
+            monkeypatch.setattr(shared, name, getattr(fake, name))
+        return asyncio.run(REGISTRY.run(tool, arguments, Context(tmp_path, CALL))), fake.asked
+
+    return run
+
+
+def test_a_command_starts_a_terminal_kept_under_the_calls_id_and_names_it(turn):
+    out, asked = turn(shared.Seen("name? "), command="./setup")
+    assert asked == [("start", "./setup", "c1", 120.0, 1.5)]
+    assert out.text.startswith("name? \n[running in terminal c1: use the terminal tool") and not out.error
+
+
+def test_each_kind_of_turn_goes_to_the_terminal_it_names(turn):
+    cases = [
+        ({"keys": "y\n", "timeout": 4}, ("type_keys", "c9", "y\n", 4.0, 1.5)),
+        ({}, ("type_keys", "c9", "", 120.0, 1.5)),  # nothing asked: wait and look again
+        ({"give_to_user": "type your password"}, ("hand_to_user", "c9", 3600.0)),
+        ({"close": True}, ("close", "c9")),
+    ]
+    for arguments, expected in cases:
+        assert turn(shared.Seen("x"), id="c9", **arguments)[1] == [expected], arguments
+
+
+def test_how_a_turn_ended_is_told_to_the_model(turn):
+    cases = [
+        (shared.Seen("", 0, running=False), {"close": True}, "(nothing new)\n[exit code 0; the terminal is closed]"),
+        (shared.Seen("^C", None, running=False), {"close": True}, "^C\n[stopped; the terminal is closed]"),
+        (
+            shared.Seen("ok", handed_back=True),
+            {"give_to_user": "pw"},
+            "ok\n[the user handed it back. running in terminal c9",
+        ),
+        (
+            shared.Seen("ok"),
+            {"give_to_user": "pw"},
+            "ok\n[the user did not hand it back within 3600s; it is yours again. running",
+        ),
+        (
+            shared.Seen("12:01", still_changing=True),
+            {"timeout": 2},
+            "12:01\n[still printing after 2s. running in terminal c9",
+        ),
+    ]
+    for seen, arguments, told in cases:
+        out = turn(seen, id="c9", **arguments)[0]
+        assert out.text.startswith(told) and not out.error, (seen, out.text)
+
+
+def test_an_interrupted_turn_is_an_error_that_says_the_terminal_still_runs(turn):
+    out = turn(shared.Seen("half", cancelled=True), id="c9", keys="x")[0]
+    assert out.error and out.text == "half\n[interrupted; still running in terminal c9]"
+
+
+def test_a_terminal_that_is_gone_or_a_call_that_asks_two_things_or_nothing_fails_and_says_why(turn):
+    gone = turn(shared.Closed("there is no open terminal 'c9': it exited or was closed"), id="c9", keys="x")
+    assert gone[0].error and "no open terminal 'c9'" in gone[0].text
+    cases = [
+        ({"id": "c9", "keys": "x", "close": True}, "keys and close"),
+        ({"command": "ls", "keys": "x"}, "command and keys"),
+        ({}, "give a command"),
+    ]
+    for arguments, said in cases:
+        out, asked = turn(shared.Seen(""), **arguments)
+        assert out.error and said in out.text and asked == [], arguments
