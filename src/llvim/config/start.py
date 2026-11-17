@@ -9,18 +9,26 @@ from llvim.std.panels.input import STANDARD, Input
 from llvim.std.panels.logviewer import Viewer
 from llvim.std.panels.status import Status
 from llvim.std.providers.openai import OpenAI
+from llvim.std.tools import bash
+from llvim.std.tools.runner import Runner
+
+TOOLS = [bash.TOOL]  # what the model is offered and the runner runs: add your own Tool values here
 
 
 def viewer():
-    Viewer().run()
+    Viewer(renderers=[bash.BOX]).run()
 
 
 def palette():
-    Input(commands=STANDARD).run()
+    Input(commands=[*STANDARD, bash.COMMAND]).run()
 
 
 def model():
-    OpenAI().run()
+    OpenAI(tools=TOOLS).run()
+
+
+def tools():
+    Runner(tools=TOOLS).run()
 
 
 def start(s):
@@ -29,4 +37,5 @@ def start(s):
     bar.focus()
     if s.env.get("LLVIM_MODEL") or (env.home() / "openai.toml").exists():
         s.window(run=model)  # the provider, in the background, once it has a model
+    s.window(run=tools)  # runs the calls the model makes; idle until there are some
     s.here.run(viewer, name="viewer")

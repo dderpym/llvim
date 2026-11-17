@@ -25,6 +25,9 @@ CASES = [
     (state((["assistant"], "he"), PROVIDER, uncommitted=True), "writing"),
     (state((["status"], "attempting to reconnect in 2s"), PROVIDER, uncommitted=True), "attempting to reconnect in 2s"),
     (state((["user"], "hi"), Request(0, {"input": "me"})), "sending"),
+    (state((["cue", "tools"],)), "waiting for the tool runner"),
+    (state((["tool_start", "bash"],), Request(0, {"tools": "llvim-tools"})), "running bash"),
+    (state((["tool_result", "bash"], "x"), Request(0, {"tools": "llvim-tools"}), uncommitted=True), "running tools"),
     (state(holder=Request(0, "a script")), "busy: a script"),
 ]
 

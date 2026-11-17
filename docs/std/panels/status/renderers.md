@@ -7,9 +7,11 @@ Status(renderers=[activity])          # without the model
 ```
 
 - `activity(state)`: one phrase, and while the turn runs, its seconds (`thinking · 4s`):
-  - nobody holds the log: *awaiting your input*; *waiting for a model* under a cue; *error: ...* (its first line) after an error;
+  - nobody holds the log: *awaiting your input*; *waiting for a model* or *waiting for the tool runner* under a cue; *error: ...*
+    (its first line) after an error;
   - a provider holds it: *thinking* or *writing* while that streams, its reconnect note while it waits to try again, else *waiting
     for the model*;
+  - the tool runner holds it: *running bash* (the tool of the call it started), else *running tools*;
   - the input bar holds it: *sending*; anyone else: *busy:* and what they claimed with.
 - `model(state)`: the model of the provider at work, else the one that wrote the last reply; `None` before any.
 

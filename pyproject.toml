@@ -13,6 +13,7 @@ logviewer = "llvim.std.panels.logviewer:main"
 llvim-input = "llvim.std.panels.input:main"
 llvim-openai = "llvim.std.providers.openai:main"
 llvim-status = "llvim.std.panels.status:main"
+llvim-tools = "llvim.std.tools.runner:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

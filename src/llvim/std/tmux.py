@@ -217,8 +217,8 @@ class Embedded:
         self.control.run(f"send-keys -t {self.pane} C-c")
 
     def transcript(self) -> str:
-        """Everything the program printed, history included, with lines that wrapped joined back. Rows are padded to the
-        terminal's width, and blank rows follow the last line, as the terminal holds them."""
+        """Everything the program printed, history included, with lines that wrapped joined back and trailing spaces as the
+        program wrote them. Empty rows follow the last line, down to the bottom of the screen."""
         return self.control.run(f"capture-pane -p -J -S - -t {self.pane}")
 
     def close(self) -> None:

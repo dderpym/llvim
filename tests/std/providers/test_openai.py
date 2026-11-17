@@ -8,6 +8,7 @@ import pytest
 from llvim.core import Request
 from llvim.std.conversation import entries
 from llvim.std.providers import openai
+from llvim.std.tools import Tool
 
 
 async def respond(log, url, **kw):
@@ -44,6 +45,38 @@ def test_reasoning_before_something_other_than_an_answer_is_not_sent(entry):
     assert "reasoning_content" not in sent[-1]
 
 
+def test_calls_go_back_on_the_assistant_message_each_followed_by_its_result_wherever_the_result_is(entry):
+    sent = openai.chat([
+        entry(["user"], "look"), entry(["thinking"], "hm"), entry(["assistant"], "I'll look."),
+        entry(["tool_call", "bash"], '{"command": "ls"}', call_id="a"), entry(["tool_call", "bash"], "", call_id="b"),
+        entry(["cue", "tools"]), entry(["tool_start", "bash"], call_id="a"), entry(["tool_result", "bash"], "a.txt", call_id="a"),
+        entry(["tool_result", "bash"], "b.txt", call_id="b"), entry(["assistant"], "Two files."),
+    ])  # fmt: skip
+    assert sent == [
+        {"role": "user", "content": "look"},
+        {"role": "assistant", "content": "I'll look.", "reasoning_content": "hm", "tool_calls": [
+            {"id": "a", "type": "function", "function": {"name": "bash", "arguments": '{"command": "ls"}'}},
+            {"id": "b", "type": "function", "function": {"name": "bash", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "a", "content": "a.txt"},
+        {"role": "tool", "tool_call_id": "b", "content": "b.txt"},
+        {"role": "assistant", "content": "Two files."},
+    ]  # fmt: skip
+
+
+def test_a_call_with_no_result_is_still_answered_so_the_api_accepts_the_conversation(entry):
+    sent = openai.chat([entry(["user"], "go"), entry(["tool_call", "bash"], "{}", call_id="a"), entry(["user", "stop"], "stopped")])
+    assert sent[1]["content"] is None and sent[2] == {"role": "tool", "tool_call_id": "a", "content": openai.NO_RESULT}
+    assert sent[3]["role"] == "user"
+
+
+def test_a_call_the_user_made_is_told_to_the_model_as_their_message_once_it_has_a_result(entry):
+    mine = entry(["tool_call", "bash"], '{"command": "make", "interactive": true}', call_id="u", user=True)
+    assert openai.chat([mine]) == []
+    sent = openai.chat([mine, entry(["tool_result", "bash"], "built", call_id="u", user=True)])
+    assert sent == [{"role": "user", "content": "I ran this in a terminal:\n$ make\nbuilt"}]
+
+
 # --- answering ---
 
 
@@ -74,6 +107,45 @@ async def test_reasoning_becomes_a_thinking_message_before_the_answer(fake_log, 
     fake_log.ask("hello")
     await respond(fake_log, server.url)
     assert said(fake_log)[2:] == [(["thinking"], "Let me think."), (["assistant"], "Hi there")]
+
+
+async def test_the_tools_are_offered_and_a_streamed_call_is_a_message_of_its_own_followed_by_a_cue_for_the_runner(fake_log, endpoint):
+    first = [{"index": 0, "id": "call_1", "function": {"name": "bash", "arguments": '{"comm'}}]
+    rest = [{"index": 0, "function": {"arguments": 'and": "ls"}'}}]
+    server = endpoint("Looking.", ("tool_calls", first), ("tool_calls", rest))
+    fake_log.ask("list")
+    bash = Tool("bash", "Run it.", {"type": "object"}, lambda a, c: "")
+    await respond(fake_log, server.url, tools=[bash])
+    assert server.requests[0]["body"]["tools"] == [
+        {"type": "function", "function": {"name": "bash", "description": "Run it.", "parameters": {"type": "object"}}}
+    ]
+    assert said(fake_log)[2:] == [
+        (["assistant"], "Looking."), (["tool_call", "bash"], '{"command": "ls"}'), (["cue", "tools"], "")
+    ]  # fmt: skip
+    assert entries(fake_log.read())[3].extra == {"model": "m", "call_id": "call_1"}
+
+
+async def test_with_no_tools_none_are_offered_and_a_reply_without_calls_cues_nobody(fake_log, endpoint):
+    server = endpoint("hi")
+    fake_log.ask("hello")
+    await respond(fake_log, server.url)
+    assert "tools" not in server.requests[0]["body"] and said(fake_log)[-1] == (["assistant"], "hi")
+
+
+async def test_a_call_cut_short_by_someone_of_higher_priority_is_not_sent_to_the_runner(fake_log, endpoint):
+    resume = threading.Event()
+    call = [{"index": 0, "id": "c", "function": {"name": "bash", "arguments": "{"}}]
+    server = endpoint(("tool_calls", call), resume, "more")
+    fake_log.ask("go")
+    answering = asyncio.create_task(respond(fake_log, server.url))
+    while len(said(fake_log)) < 3:
+        await asyncio.sleep(0.005)
+    fake_log.waiting = [Request(5)]
+    try:
+        await asyncio.wait_for(answering, 1)
+    finally:
+        resume.set()
+    assert said(fake_log)[-1] == (["tool_call", "bash"], "{")
 
 
 # --- when it goes wrong ---

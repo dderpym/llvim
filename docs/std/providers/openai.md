@@ -8,25 +8,32 @@ llvim-openai                    # answer the log "main" of the working folder, u
 llvim-openai alt -p ~/proj -m llama3 --base-url http://localhost:11434/v1
 ```
 
-- `OpenAI(model=None, base_url=None, log=None, timeout=60, retries=5, priority=0, once=False).run()`: the program. The model and URL
+- `OpenAI(model=None, base_url=None, log=None, timeout=60, retries=5, priority=0, once=False, tools=()).run()`: the program.
+  `tools` are offered to the model; `llvim-openai` offers bash unless given `--no-tools`. The model and URL
   default to the [settings](openai_settings.md), the log to the session's. No model anywhere: it exits saying so.
-- `serve(log, model, base_url, api_key, timeout, retries, priority)`, async: answers each `GENERATE` cue (`cues.receive`), until
+- `serve(log, model, base_url, api_key, timeout, retries, priority, tools=())`, async: answers each `GENERATE` cue (`cues.receive`), until
   cancelled.
-- `respond(log, model, base_url, api_key=None, timeout=60, priority=0, retries=5, backoff=1)`, async: answers if the model is cued now
+- `respond(log, model, base_url, api_key=None, timeout=60, priority=0, retries=5, backoff=1, tools=())`, async: answers if the model is cued now
   (`cues.take`); whether it wrote anything.
-- `answer(log, writer, model, base_url, api_key, timeout, retries, backoff)`, async: the answer itself, with the log held.
+- `answer(log, writer, model, base_url, api_key, timeout, retries, backoff, tools=())`, async: the answer itself, with the log held.
 - `chat(entries)`: the chat messages for a log.
-- `stream(base_url, api_key, model, messages, timeout)`: the reply as `(tag, text)` pieces, `thinking` or `assistant`. Raises
-  `ApiError`, with `retryable` and `retry_after`.
+- `stream(base_url, api_key, model, messages, timeout, tools=None)`: the reply as `(tag, text, call)` pieces, `thinking`,
+  `assistant` or `tool_call`. For a call the text is a piece of its arguments and `call` says which (`index`, `id`, `name`).
+  Raises `ApiError`, with `retryable` and `retry_after`.
+- `to_openai(tool)`: a [Tool](../tools/registry.md) in the shape of this API's `tools` list.
 
 ## Using it
 
 - **What is sent:** the entries tagged `system`, `user` or `assistant`, with that role. Thinking goes back as the `reasoning_content`
   of the assistant message after it, for the turn in progress only (after the last user message). Cues, errors and anything else are
-  left out.
+  left out. A tool call goes on the assistant message before it as `tool_calls`, followed by one `tool` message per call, holding
+  its result wherever that is in the log, or `[no result: ...]` if it has none. A call the user made (`/bash`) is a user message
+  instead, `I ran this in a terminal: $ <command>` and its output, once it has a result ([calls.md](../tools/calls.md)).
 - **What is written:** the reply as an `["assistant"]` message with a `model` field, streamed with `extend`. Reasoning the server
   streams (`reasoning_content`, or `reasoning`) is a `["thinking"]` message the same way; a new message starts each time the text
-  turns from one to the other. Then one commit, signed as the model.
+  turns from one to the other. A tool call the model streams is a `["tool_call", <tool>]` message of its own, with `call_id` and
+  `model`, whose text is the arguments. If the reply made calls, a `tools` cue follows it, for the [runner](../tools/runner.md).
+  Then one commit, signed as the model.
 - **Handing over:** it claims at `priority` (0) and waits on `outranked_changed()` alongside the server. Outranked, it stops where it
   is, commits what arrived and lets go; outranked before anything arrived, it lets go with nothing written. It writes no note: whoever took the log says why.
 - **When it fails:** a connection that fails before any text has arrived is tried again up to `retries` times: unreachable, silent
@@ -35,6 +42,13 @@ llvim-openai alt -p ~/proj -m llama3 --base-url http://localhost:11434/v1
   `["error"]` message after what had arrived. That overtakes the cue, so nothing is tried again until there is a new one.
 
 ## Why it is this way
+
+- **Every call is answered in what is sent.** The API refuses an assistant message whose calls are not each followed by a result.
+  A call cut off by a stop, or by a runner that died, has none, so it is sent with a stand-in.
+- **A call cut short is not run.** Outranked mid-reply, the provider commits what arrived but does not cue the runner. Arguments
+  that stopped halfway are not a call anyone asked for.
+- **A `/bash` call is the user's message.** The model did not make it, and an assistant message with calls it never made would
+  confuse it.
 
 - **It answers cues, not the last message.** See [cues.md](../cues.md).
 - **The reply is read in a thread, and waited on together with the queue.** `urllib` blocks, so a daemon thread reads the stream and

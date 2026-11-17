@@ -17,6 +17,9 @@ class Tag(StrEnum):
     ERROR = "error"  # a failure the user should see
     STOP = "stop"  # second tag of the user message that stopped the model
     CUE = "cue"  # `[CUE, channel]`: see cues.py
+    TOOL_CALL = "tool_call"  # `[TOOL_CALL, tool]`: see tools/calls.py
+    TOOL_START = "tool_start"
+    TOOL_RESULT = "tool_result"
 
 
 ROLES = (Tag.SYSTEM, Tag.USER, Tag.ASSISTANT)
@@ -24,6 +27,9 @@ ROLES = (Tag.SYSTEM, Tag.USER, Tag.ASSISTANT)
 
 class Field(StrEnum):
     MODEL = "model"
+    CALL_ID = "call_id"  # on a tool call, its start and its result
+    USER = "user"  # on a tool call the user made (`/bash`), not the model
+    ERROR = "error"  # on a tool result: the call failed
 
 
 class Info(StrEnum):
@@ -32,6 +38,7 @@ class Info(StrEnum):
     PROVIDER = "provider"
     MODEL = "model"
     INPUT = "input"
+    TOOLS = "tools"
 
 
 @dataclass(frozen=True)

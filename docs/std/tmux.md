@@ -26,7 +26,8 @@ term.close()
 ## Using it
 
 - A `Control` answers in about 0.05 ms; a `tmux` process each time costs about 5 ms. Make one and keep it.
-- `transcript()` is as the terminal holds it: rows padded with spaces to its width, blank rows under the last line.
+- `transcript()` is the screen and its history. Lines that wrapped are joined, and the trailing spaces are the program's own, not
+  padding. Empty rows follow the last line, down to the bottom of the screen.
 
 ## Why it is this way
 

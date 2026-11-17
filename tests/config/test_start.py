@@ -9,7 +9,7 @@ from llvim.cli import command
 pytestmark = pytest.mark.needs_tmux
 
 
-ROLES = {"--start": "viewer", ":palette": "input", ":Status": "status", ":model": "openai"}  # what each pane runs
+ROLES = {"--start": "viewer", ":palette": "input", ":Status": "status", ":model": "openai", ":tools": "tools"}  # what each pane runs
 
 
 def role(start_command: str) -> str | None:
@@ -19,7 +19,7 @@ def role(start_command: str) -> str | None:
 @pytest.fixture
 def layout(tmp_path, monkeypatch):
     """The shipped layout, started in a tmux of its own. Yields `(tmux, panes)`: panes is {role: (pane id, height)} for the
-    viewer, input, status and openai."""
+    viewer, input, status, openai and the tool runner."""
     monkeypatch.setenv("LLVIM_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("LLVIM_STORE", str(tmp_path / "store"))
     monkeypatch.setenv("LLVIM_SOCKET", f"llvimlayout{tmp_path.name[-6:]}")
@@ -38,7 +38,7 @@ def layout(tmp_path, monkeypatch):
         for _ in range(100):  # the script lays the session out
             listed = [l.split(" ", 2) for l in tmux("list-panes", "-a", "-F", "#{pane_id} #{pane_height} #{pane_start_command}").splitlines()]
             panes = {role(cmd): (pane, height) for pane, height, cmd in listed if role(cmd)}
-            if len(panes) == 4:
+            if len(panes) == 5:
                 break
             time.sleep(0.1)
         yield tmux, panes
@@ -46,9 +46,9 @@ def layout(tmp_path, monkeypatch):
         tmux("kill-server")
 
 
-def test_the_script_lays_out_the_viewer_a_status_line_and_a_three_line_input_bar_and_starts_the_provider(layout):
+def test_the_script_lays_out_the_viewer_a_status_line_and_a_three_line_input_bar_and_starts_the_provider_and_runner(layout):
     tmux, panes = layout
-    assert set(panes) == {"viewer", "input", "status", "openai"}
+    assert set(panes) == {"viewer", "input", "status", "openai", "tools"}
     assert panes["input"][1] == "3" and panes["status"][1] == "1"
     assert int(panes["viewer"][1]) >= 20  # the log gets the rest
     assert tmux("list-panes", "-F", "#{?pane_active,#{pane_id},}").split() == [panes["input"][0]]  # the cursor starts in the input bar

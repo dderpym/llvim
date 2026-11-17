@@ -24,6 +24,8 @@ async for writer in cues.receive(log, GENERATE, Request(0)):     # the provider:
 - The turn: `busy(log)`: someone holds the log, or a cue is last. `take_turn(log, request)`, async: the log once the whole turn is
   over, with no cue left once it is held; it waits again if one was left while it waited.
 - `GENERATE` (`"generate"`): a model should write the next message.
+- `TOOLS` (`"tools"`): the tool calls without a result should be run. The provider sends it with a reply that made calls, and
+  `/bash` with yours; the [runner](tools/runner.md) answers it.
 
 ## Using it
 

@@ -8,6 +8,7 @@ from llvim.core import Log, Request, Snapshot, Writer
 from llvim.std.conversation import Entry, Tag, decode, encode
 
 GENERATE = "generate"  # a model should write the next message
+TOOLS = "tools"  # the tool calls without a result should be run
 
 
 def channel(entry: Entry) -> str | None:
