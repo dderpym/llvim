@@ -4,7 +4,7 @@ The list where you void messages and put them back. It holds the log for as long
 [-p project]` runs it in any terminal.
 
 ```
-enter: void from here on · v: void or restore · tab: open a turn · esc: close
+enter: void from here on · v: void or restore · tab: open a turn · a: hide voided · esc: close
  ▸   1  list the files
  ▾   2  now delete them                                              ◐
           user  now delete them
@@ -20,6 +20,8 @@ enter: void from here on · v: void or restore · tab: open a turn · esc: close
 - **Tab** (or Right) opens a turn into its elements ([turns.md](turns.md)); Left shuts it.
 - **Esc**, `q` or Ctrl-C closes.
 - A row is marked `VOID` when all of it is voided, and `◐` when part of it is.
+- **`a`** shows the rows that are all voided, or hides them again. They are hidden when the picker opens. A turn voided in part
+  is always shown. When `v` hides the chosen row, the row now in its place is chosen.
 - `Picker(log, screen, writer)`: the list, over a log it is given held.
 - `pick(log, screen, address=None)`, async: runs the picker with the log held, and lets it go when the picker closes.
   - With `address` (`llvim-void --adopt ADDRESS`): it adopts the claim offered there ([handoff.md](../../core/handoff.md)). This
@@ -47,5 +49,8 @@ enter: void from here on · v: void or restore · tab: open a turn · esc: close
   the middle of a keypress, and decide what "after" meant for messages written during the wait.
 - **It commits each change, not all on closing.** A picker that is killed, or a popup that is closed from outside, loses nothing
   that was shown as done.
+- **What is voided is hidden until asked for.** Voided turns pile up, and the list is for choosing what to void next. Restoring is
+  rarer, so it costs one key, `a`, to see them. A turn voided in part stays: some of it is still sent, and its other elements may
+  be voided next. Numbers keep counting the hidden turns, so a gap shows where they are.
 - **`v` toggles, Enter does not.** One key that voids and restores makes a mistake one keypress to undo. Enter covers many rows
   in different states; restoring some and voiding others would be a guess.

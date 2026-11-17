@@ -18,7 +18,8 @@ from llvim.std.void.tag import marked
 from llvim.std.void.turns import Element, Turn, Voided, turns
 
 ENTER, TOGGLE, OPEN, SHUT, CLOSE = (b"\r", b"\n"), (b"v", b" "), (b"\t", b"\x1b[C", b"\x1bOC"), (b"\x1b[D", b"\x1bOD"), (b"\x1b", b"q", b"\x03")  # fmt: skip
-HELP = "enter: void from here on · v: void or restore · tab: open a turn · esc: close"
+SHOW = (b"a",)
+HELP = "enter: void from here on · v: void or restore · tab: open a turn · a: {} voided · esc: close"
 WAITING = "waiting for the log: it is in use (esc gives up)"
 REQUEST = Request(0, "/void")  # what the others see holds the log while the picker is open
 SELECTED, DIM, HEAD = "\x1b[7m", "\x1b[2m", "\x1b[1m"
@@ -61,24 +62,40 @@ class Picker:
         self.turns: list[Turn] = []
         self.open: set[int] = set()  # the turns shown with their elements, by id
         self.at: tuple[int, int | None] | None = None  # the chosen row's id; None before there is one
+        self.show_voided = False
         self.notice, self.done = "", False
         self._poke = asyncio.Event()
         self.load()
 
-    def load(self) -> None:
+    def load(self, near: int | None = None) -> None:
         """Read the log. The chosen row stays chosen; at first, the last turn is."""
         self.turns = turns(entries(self.log.read()))
+        self._keep_choice(near)
+
+    def _keep_choice(self, near: int | None) -> None:
+        """If the chosen row is no longer shown, choose the one now at its place, `near`."""
         rows = self.rows()
-        if rows and self.at not in {row.id for row in rows}:
+        if not rows or self.at in {row.id for row in rows}:
+            return
+        if near is None:
             self.at = next(row.id for row in reversed(rows) if row.element is None)
+        else:
+            self.at = rows[min(near, len(rows) - 1)].id
 
     def rows(self) -> list[Row]:
         out = []
         for number, turn in enumerate(self.turns, 1):
-            out.append(Row(turn, number))
-            if turn.id in self.open:
-                out.extend(Row(turn, number, element) for element in turn.elements)
+            if self._shown(turn):
+                out.append(Row(turn, number))
+                if turn.id in self.open:
+                    out.extend(Row(turn, number, element) for element in turn.elements if self._shown(element))
         return out
+
+    def _shown(self, part: Turn | Element) -> bool:
+        return self.show_voided or part.voided != Voided.ALL
+
+    def _index(self) -> int | None:
+        return next((i for i, row in enumerate(self.rows()) if row.id == self.at), None)
 
     def chosen(self) -> Row | None:
         return next((row for row in self.rows() if row.id == self.at), None)
@@ -88,6 +105,10 @@ class Picker:
         row = self.chosen()
         if raw in CLOSE:
             self.done = True
+        elif raw in SHOW:
+            near = self._index()
+            self.show_voided = not self.show_voided
+            self._keep_choice(near)
         elif row is None:
             return
         elif raw in UP or raw == b"k":
@@ -112,19 +133,22 @@ class Picker:
         self.at = rows[max(0, min(len(rows) - 1, index + by))].id
 
     async def mark(self, ids: list[int], void: bool) -> None:
+        near = self._index()
         await set_void(self.writer, self.log, ids, void)
-        self.load()
+        self.load(near)
 
     def render(self, cols: int, height: int) -> list[str]:
         """The screen: a line of help (or the notice), then as many rows as fit, scrolled to keep the chosen one in sight."""
         rows = self.rows()
         room = max(height - 1, 1)
-        index = next((i for i, row in enumerate(rows) if row.id == self.at), 0)
+        index = self._index() or 0
         top = max(0, min(index - room // 2, len(rows) - room))
         body = [self._line(row, cols, row.id == self.at) for row in rows[top : top + room]]
+        help = HELP.format("hide" if self.show_voided else "show")
+        empty = "all of it is voided (a: show it)" if self.turns else "the log is empty"
         return [
-            pad(cut(f"{HEAD}{self.notice or HELP}{RESET}", 0, cols), cols),
-            *(body or [pad(f"{DIM}the log is empty{RESET}", cols)]),
+            pad(cut(f"{HEAD}{self.notice or help}{RESET}", 0, cols), cols),
+            *(body or [pad(f"{DIM}{empty}{RESET}", cols)]),
         ]
 
     def _line(self, row: Row, cols: int, selected: bool) -> str:

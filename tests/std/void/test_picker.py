@@ -103,7 +103,7 @@ async def test_enter_voids_the_chosen_turn_and_everything_after_it_cues_too_and_
 async def test_v_voids_only_the_chosen_turn_and_stays_open_and_v_again_restores_it(log, stub_screen):
     picker = await opened(log, stub_screen)
     before = log.read().messages
-    await press(picker, UP, b"v")
+    await press(picker, b"a", UP, b"v")
     assert not picker.done and voided(log) == [
         "two",
         "cue",
@@ -135,7 +135,7 @@ async def test_v_on_an_element_voids_it_alone_a_call_with_its_start_and_result_a
     log, stub_screen
 ):
     picker = await opened(log, stub_screen)
-    await press(picker, UP, TAB, DOWN, DOWN, DOWN, b"v")
+    await press(picker, b"a", UP, TAB, DOWN, DOWN, DOWN, b"v")
     assert voided(log) == ['{"command": "ls"}', "cue", "tool_start", "a.txt", "cue"]
     rows = shown(picker)
     assert rows[2].endswith("◐") and rows[5].endswith("VOID") and not rows[4].endswith("VOID")
@@ -149,8 +149,44 @@ async def test_enter_on_an_element_voids_from_it_on(log, stub_screen):
 
 async def test_enter_does_not_restore_what_is_already_voided(log, stub_screen):
     picker = await opened(log, stub_screen)
-    await press(picker, b"v", UP, ENTER)
+    await press(picker, b"a", b"v", UP, ENTER)
     assert len(voided(log)) == 12
+
+
+async def test_a_voided_turn_is_hidden_and_the_turn_now_in_its_place_is_chosen(log, stub_screen):
+    picker = await opened(log, stub_screen)
+    await press(picker, UP, b"v")
+    assert shown(picker)[1:] == [" ▸   1  one", " ▸   3  three"] and picker.chosen().number == 3
+    await press(picker, b"v")
+    assert shown(picker)[1:] == [" ▸   1  one"] and picker.chosen().number == 1
+
+
+async def test_a_voided_element_of_an_open_turn_is_hidden_and_one_voided_in_part_is_not(log, stub_screen):
+    picker = await opened(log, stub_screen)
+    await press(picker, UP, TAB, DOWN, DOWN, DOWN, b"v")
+    assert shown(picker)[2:6] == [
+        " ▾   2  two                                               ◐", "          user  two", "          assistant  I'll look",
+        "          assistant  done",
+    ]  # fmt: skip
+
+
+async def test_a_shows_what_is_voided_and_a_again_hides_it_keeping_the_choice_in_sight(log, stub_screen):
+    picker = await opened(log, stub_screen)
+    await press(picker, UP, b"v", b"a")
+    assert shown(picker)[2].endswith("VOID") and "a: hide voided" in shown(picker, cols=120)[0]
+    await press(picker, UP, b"a")
+    assert shown(picker)[1:] == [" ▸   1  one", " ▸   3  three"] and picker.chosen().number == 3
+
+
+async def test_when_all_of_it_is_voided_it_says_so_and_a_still_shows_it(log, stub_screen):
+    picker = await opened(log, stub_screen)
+    await press(picker, UP, UP, ENTER)
+    picker.done = False
+    assert shown(picker)[1] == "all of it is voided (a: show it)"
+    await press(picker, b"a")
+    assert picker.chosen().number == 1
+    await press(picker, b"v")
+    assert voided(log)[0] == "two"
 
 
 async def test_each_void_is_committed_as_it_is_made(log, stub_screen):
