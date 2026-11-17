@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from llvim.std.conversation import Entry, Tag
+from llvim.std.cues import is_cue
 from llvim.std.panels.logviewer import markdown, text
 from llvim.std.panels.logviewer.box import Box, Host, Renderer, alone
 
@@ -79,10 +80,6 @@ class Hidden(Box):
     """A message that is only for the programs."""
 
     framed = False
-
-
-def is_cue(m: Entry) -> bool:
-    return m.tags[:1] == [Tag.CUE]
 
 
 class Static(Box):

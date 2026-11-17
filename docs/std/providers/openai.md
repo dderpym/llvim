@@ -10,9 +10,11 @@ llvim-openai alt -p ~/proj -m llama3 --base-url http://localhost:11434/v1
 
 - `OpenAI(model=None, base_url=None, log=None, timeout=60, retries=5, priority=0, once=False).run()`: the program. The model and URL
   default to the [settings](openai_settings.md), the log to the session's. No model anywhere: it exits saying so.
-- `serve(log, model, base_url, api_key, timeout, retries, priority)`, async: answers each `GENERATE` cue, until cancelled.
-- `respond(log, model, base_url, api_key=None, timeout=60, priority=0, retries=5, backoff=1)`, async: answers if the last message is a
-  `GENERATE` cue; whether it wrote anything.
+- `serve(log, model, base_url, api_key, timeout, retries, priority)`, async: answers each `GENERATE` cue (`cues.receive`), until
+  cancelled.
+- `respond(log, model, base_url, api_key=None, timeout=60, priority=0, retries=5, backoff=1)`, async: answers if the model is cued now
+  (`cues.take`); whether it wrote anything.
+- `answer(log, writer, model, base_url, api_key, timeout, retries, backoff)`, async: the answer itself, with the log held.
 - `chat(entries)`: the chat messages for a log.
 - `stream(base_url, api_key, model, messages, timeout)`: the reply as `(tag, text)` pieces, `thinking` or `assistant`. Raises
   `ApiError`, with `retryable` and `retry_after`.

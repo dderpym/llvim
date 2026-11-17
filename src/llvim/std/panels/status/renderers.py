@@ -1,7 +1,7 @@
 """std/panels/status/renderers.py: the built-in status renderers: what is happening to the log, and which model is at it."""
 
 from llvim.std.conversation import Info, Tag
-from llvim.std.cues import GENERATE, channel
+from llvim.std.cues import GENERATE, is_cue
 from llvim.std.panels.status.bar import State
 
 DIM, WORKING, ERROR, RESET = "\x1b[38;5;245m", "\x1b[1;36m", "\x1b[1;31m", "\x1b[0m"
@@ -18,7 +18,7 @@ def activity(state: State) -> str:
 def _phrase(state: State) -> tuple[str, str]:
     last, holder = state.last, state.holder
     if holder is None:
-        if last is not None and channel(last) == GENERATE:
+        if last is not None and is_cue(last, GENERATE):
             return "waiting for a model", WORKING
         if last is not None and last.tags[:1] == [Tag.ERROR]:
             return f"error: {last.content.splitlines()[0] if last.content else ''}", ERROR

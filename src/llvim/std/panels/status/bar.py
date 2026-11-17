@@ -10,7 +10,7 @@ from typing import Any
 
 from llvim.core import Log, Request, Snapshot
 from llvim.std.conversation import Entry, Field, decode
-from llvim.std.cues import channel
+from llvim.std.cues import is_cue
 from llvim.std.panels.keys import Key, Panes, Redirect
 from llvim.std.panels.logviewer.ansi import pad, width, wrap
 
@@ -58,7 +58,7 @@ class StatusBar:
         fresh = last is not None and last.id in uncommitted
         entry = decode(last, fresh, fresh) if last is not None else None
         holder, now = self.log.holder(), self.clock()
-        busy = holder is not None or (entry is not None and channel(entry) is not None)
+        busy = holder is not None or (entry is not None and is_cue(entry))
         if not busy:
             self.busy_since = None
         elif self.busy_since is None:

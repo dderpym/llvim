@@ -10,13 +10,13 @@ import os
 import subprocess
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
-from contextlib import aclosing
 from typing import Any
 
 from llvim.core import Author, Log, Request, Writer
 from llvim.std import env
 from llvim.std.conversation import Info, Tag, encode
-from llvim.std.cues import GENERATE, busy, cue, cued
+from llvim.std import cues
+from llvim.std.cues import GENERATE, busy
 from llvim.std.panels.input import view
 from llvim.std.panels.input.commands import Command, Context
 from llvim.std.panels.input.complete import Suggestion, command_name, complete
@@ -33,28 +33,15 @@ PASTE_START, PASTE_END = b"\x1b[200~", b"\x1b[201~"
 VIEWER_KEYS = (*PAGE_UP, *PAGE_DOWN)  # scrolling is the viewer's: the bar passes these on without taking the focus
 
 
-async def idle(log: Log) -> None:
-    """Return once the turn is over (`cues.busy`)."""
-    async with aclosing(log.changes()) as changes:
-        async for _ in changes:
-            if not busy(log):
-                return
-
-
 async def after_turn(log: Log, write: Callable[[Writer], None], message: str = "") -> None:
-    """Once the whole turn in progress is over, claim the log, `write`, and commit as the user.
+    """Once the whole turn in progress is over (`cues.take_turn`), `write`, and commit as the user.
 
     Waiting for the turn, not just for the holder, is what keeps a tool call answered: the model releases the log with a cue
     for the runner, and a claim made while it held the log would be first in the queue, ahead of the runner."""
     user = getpass.getuser()
-    while True:
-        await idle(log)
-        async with await log.claim(Request(PRIORITY, {Info.INPUT: user})) as writer:
-            if cued(log.read()) is not None:
-                continue  # someone cued while we waited for the log: their turn comes first
-            write(writer)
-            await writer.commit(author=Author(user), message=message)
-            return
+    async with await cues.take_turn(log, Request(PRIORITY, {Info.INPUT: user})) as writer:
+        write(writer)
+        await writer.commit(author=Author(user), message=message)
 
 
 async def send(log: Log, text: str) -> None:
@@ -62,7 +49,7 @@ async def send(log: Log, text: str) -> None:
 
     def write(writer: Writer) -> None:
         writer.append(encode([Tag.USER], text))
-        writer.append(cue(GENERATE))
+        cues.send(writer, GENERATE)
 
     await after_turn(log, write)
 

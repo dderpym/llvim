@@ -12,12 +12,11 @@ import threading
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
-from contextlib import aclosing
 
 from llvim.core import Author, Log, Request, Writer
 from llvim.std import env
 from llvim.std.conversation import ROLES, Entry, Field, Info, Tag, encode, entries
-from llvim.std.cues import GENERATE, cued
+from llvim.std.cues import GENERATE, cued, receive, take
 from llvim.std.providers import openai_settings as settings
 
 BODY_PREVIEW = 500  # bytes of an error response kept in the log
@@ -233,31 +232,40 @@ async def respond(
     retries: int = 5,
     backoff: float = 1.0,
 ) -> bool:
-    """Answer the log if the model is cued. Returns whether it wrote anything."""
-    if cued(log.read()) != GENERATE:
+    """Answer the log if the model is cued now. Returns whether it wrote anything."""
+    writer = await take(log, GENERATE, _request(model, priority))
+    if writer is None:
         return False
-    async with await log.claim(Request(priority, {Info.PROVIDER: "openai", Info.MODEL: model})) as writer:
-        snapshot = log.read()
-        if cued(snapshot) != GENERATE:
-            return False
-        history = chat(entries(snapshot))
-        reply = _Reply(writer, model)
-        for attempt in range(retries + 1):
-            try:
-                if await _relay(stream(base_url, api_key, model, history, timeout), reply) and not reply.wrote:
-                    raise ApiError("the server sent an empty reply")
+    async with writer:
+        return await answer(log, writer, model, base_url, api_key, timeout, retries, backoff)
+
+
+async def answer(
+    log: Log, writer: Writer, model: str, base_url: str, api_key: str | None, timeout: float, retries: int, backoff: float
+) -> bool:
+    """Answer the cue for the model, with the log held. Returns whether it wrote anything."""
+    history = chat(entries(log.read()))
+    reply = _Reply(writer, model)
+    for attempt in range(retries + 1):
+        try:
+            if await _relay(stream(base_url, api_key, model, history, timeout), reply) and not reply.wrote:
+                raise ApiError("the server sent an empty reply")
+            break
+        except ApiError as error:
+            if reply.wrote or not error.retryable or attempt == retries:
+                note = str(error) + (f" (after {attempt + 1} attempts)" if attempt else "")
+                writer.append(encode([Tag.ERROR], note))
                 break
-            except ApiError as error:
-                if reply.wrote or not error.retryable or attempt == retries:
-                    note = str(error) + (f" (after {attempt + 1} attempts)" if attempt else "")
-                    writer.append(encode([Tag.ERROR], note))
-                    break
-                if not await _reconnect(writer, error, attempt, retries, backoff):
-                    return False
-        if not reply.wrote and cued(log.read()) == GENERATE:
-            return False
-        await writer.commit(author=_author(model))
+            if not await _reconnect(writer, error, attempt, retries, backoff):
+                return False
+    if not reply.wrote and cued(log.read()) == GENERATE:
+        return False
+    await writer.commit(author=_author(model))
     return True
+
+
+def _request(model: str, priority: int) -> Request:
+    return Request(priority, {Info.PROVIDER: "openai", Info.MODEL: model})
 
 
 def _author(model: str) -> Author:
@@ -269,10 +277,8 @@ def _author(model: str) -> Author:
 
 async def serve(log: Log, model: str, base_url: str, api_key: str | None, timeout: float, retries: int, priority: int):
     """Answer each cue for the model, until cancelled."""
-    async with aclosing(log.changes()) as changes:
-        async for snapshot in changes:
-            if cued(snapshot) == GENERATE:
-                await respond(log, model, base_url, api_key, timeout, priority, retries)
+    async for writer in receive(log, GENERATE, _request(model, priority)):
+        await answer(log, writer, model, base_url, api_key, timeout, retries, 1.0)
 
 
 def configure() -> None:

@@ -7,9 +7,8 @@ bar = Bar(log, screen, Panes(), Growth(), history, commands=STANDARD)
 await bar.run()                                  # until /quit or the terminal closes
 ```
 
-- `after_turn(log, write, message="")`, async: waits until the whole turn is over (nobody holds the log and no cue is last,
-  [cues.md](../../cues.md)), claims it, calls `write(writer)` and commits as the user. If a cue was left while it waited for the
-  log, it lets go and waits for that turn too.
+- `after_turn(log, write, message="")`, async: takes the log once the whole turn is over (`cues.take_turn`,
+  [cues.md](../../cues.md)), calls `write(writer)` and commits as the user.
 - `send(log, text)`, async: `after_turn` writing a `["user"]` message with `text` and a `GENERATE` cue.
 - `stop(log)`, async: takes the log at `STOP_PRIORITY`, above any provider, and commits `["user", "stop"]` "User stopped this
   response.", with no cue.
@@ -39,11 +38,11 @@ await bar.run()                                  # until /quit or the terminal c
 
 - **A message waits for the whole turn, not for the holder.** A turn passes the log from program to program: the model releases it
   with a cue for the tool runner, which only then claims. A message that claimed as soon as the model let go would already be first
-  in the queue, land after the runner's cue, and the calls would never run. So `after_turn` claims only once nobody holds the log and
-  no cue is last, and looks again once it has the log.
+  in the queue, land after the runner's cue, and the calls would never run. So `after_turn` takes the turn with `cues.take_turn`,
+  which claims only once nobody holds the log and no cue is last, and looks again once it has the log.
 - **Only stop cuts a turn short.** A queued item claims at `PRIORITY`, 0, a provider's default, so a provider holding the log is not
   `outranked()` by it even in the moment between the bar's look and its claim. Priority decides who goes first among claims; the
-  waiting is `after_turn`'s. Stopping alone claims above.
+  waiting is `take_turn`'s. Stopping alone claims above.
 - **The stop is a user message.** It tells the model, in the next turn, why its last reply ends where it does. It has no cue: nothing
   should answer it.
 - **Everything that writes for the user goes through one queue.** Sending at once when the model is idle and queueing when it is

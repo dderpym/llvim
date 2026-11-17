@@ -9,7 +9,7 @@ chain([mine])          # [mine, thinking, markdown, hidden, fallback]
 - `Thinking`: a message tagged `thinking`, its markdown all in grey. In full while it streams; finished, it folds to one line
   (`▸ [thinking] 120 words · click to open`) and a click opens and folds it.
 - `Markdown`: an `assistant` message, its markdown drawn at the width, with two blank rows under it once finished.
-- `Hidden`: a cue. It shows nothing.
+- `Hidden`: a cue (`cues.is_cue`, [cues.md](../../cues.md)). It shows nothing.
 - `Fallback`: anything: the tags in bold, then the content. A streaming message is left open, with no blank rows.
 - `Static(host, messages, fn)`: a text function `fn(tags, content)` as a box; see [render.md](render.md).
 

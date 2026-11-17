@@ -2,13 +2,12 @@
 
 import asyncio
 import getpass
-from contextlib import aclosing
 
 import pytest
 
 from llvim.core import Request
 from llvim.std.conversation import encode, entries
-from llvim.std.cues import GENERATE, cue, cued
+from llvim.std.cues import GENERATE, cued, receive, send
 from llvim.std.panels.input import STANDARD
 from llvim.std.panels.input import bar as barmod
 from llvim.std.panels.input.bar import Bar
@@ -243,13 +242,9 @@ async def test_the_bar_runs_until_a_command_ends_it(make, stub_screen):
 
 
 async def on_cue(log, channel, act):
-    """Act each time `channel` is cued, as a provider or a tool runner does: claim, check the cue again, act."""
-    async with aclosing(log.changes()) as changes:
-        async for snapshot in changes:
-            if cued(snapshot) == channel:
-                async with await log.claim(Request(0, {"who": channel})) as writer:
-                    if cued(log.read()) == channel:
-                        await act(writer)
+    """Act each time `channel` is cued, as a provider or a tool runner does."""
+    async for writer in receive(log, channel, Request(0, {"who": channel})):
+        await act(writer)
 
 
 def model(replies):
@@ -263,7 +258,7 @@ def model(replies):
             while not writer.outranked() and not typed.is_set():
                 await asyncio.sleep(0.001)
             await asyncio.sleep(0.02)  # the message typed meanwhile is waiting to claim
-            writer.append(cue("tools"))
+            send(writer, "tools")
         await writer.commit()
 
     typed = asyncio.Event()
@@ -272,7 +267,7 @@ def model(replies):
 
 async def runner(writer):
     writer.append(encode(["tool_result"], "a.txt"))
-    writer.append(cue(GENERATE))
+    send(writer, GENERATE)
     await writer.commit()
 
 

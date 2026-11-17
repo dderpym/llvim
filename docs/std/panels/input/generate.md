@@ -9,7 +9,7 @@ Input(commands=[*STANDARD]).run()     # STANDARD has CONTINUE
 
 - The log is empty: it says so, and queues nothing.
 - Otherwise: `cue_the_model` is queued. Once the turn in progress is over, it commits the cue.
-- `cue_the_model(log)`, async: the queued work, `after_turn` writing one cue.
+- `cue_the_model(log)`, async: the queued work: `after_turn` with `cues.send(writer, GENERATE)`.
 
 ## Using it
 
