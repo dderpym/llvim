@@ -49,6 +49,16 @@ def test_a_cue_is_no_element_of_its_own_it_goes_with_the_message_before_it(entry
     assert shape(turns(log)) == [[("user", 2), ("assistant", 2)]]
 
 
+def test_a_snapshot_record_is_no_element_and_the_cue_after_it_goes_with_the_message_it_asks_about(entry):
+    log = [entry(["user"], "hi"), entry(["snapshot"], skipped=[]), entry(["cue", "generate"]), entry(["assistant"], "yo")]
+    (turn,) = turns(log)
+    assert shape([turn]) == [[("user", 2), ("assistant", 1)]] and turn.elements[0].entries[1].tags == ["cue", "generate"]
+
+
+def test_snapshot_records_alone_make_no_turn(entry):
+    assert turns([entry(["snapshot", "error"], "Not snapshotted: too big", refused=True)]) == []
+
+
 def test_voided_messages_are_grouped_as_what_they_were(entry):
     log = [entry(["user", "void"], "one"), entry(["cue", "generate", "void"]), entry(["user"], "two")]
     found = turns(log)

@@ -14,7 +14,8 @@ for turn in turns(entries(log.read())):
   - The note a stop leaves (`["user", "stop"]`) does not start a turn. It belongs to the turn it stopped.
 - An `Element` is one message, except:
   - a tool call, its start and its result are one element, found by call id;
-  - a cue is not an element. It joins the element before it.
+  - a cue is not an element. It joins the element before it;
+  - a snapshot record ([snapshot.md](../snapshot.md)) is in no element at all, so the cue after it joins the user message.
 - `voided`, on a turn or an element: `Voided.NONE`, `PART` or `ALL` of its messages.
 - `label`: the tags and the first line of text of its first message. A turn that starts with a user message is labelled with the
   text alone.
@@ -32,3 +33,6 @@ for turn in turns(entries(log.read())):
   too, so one row in the picker is one thing on screen.
 - **A cue goes with what it asks about.** A cue left alone after its message was voided would still be answered, by a model that
   was not sent the message.
+- **Snapshot records are not listed.** A record is the program's note of what it kept, not part of the conversation: the model is
+  never sent one, so voiding it would change nothing. Left in, it would also sit between a user message and its cue, and take
+  the cue away from the message. Voiding a turn leaves its record as it is, so `snapshot.at` still finds the turn's snapshot.

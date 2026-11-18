@@ -7,6 +7,7 @@ from enum import StrEnum
 
 from llvim.std.conversation import Entry, Tag
 from llvim.std.cues import is_cue
+from llvim.std.snapshot import is_record
 from llvim.std.tools.calls import CALL, RESULT, START, call_id, kind, name
 from llvim.std.void.tag import is_void, unmarked
 
@@ -81,6 +82,8 @@ def turns(entries: list[Entry]) -> list[Turn]:
     calls: dict[str, list[Entry]] = {}  # the element of each call of the turn being read
     for entry in entries:
         plain = unmarked(entry)
+        if is_record(plain):
+            continue
         if _starts_turn(plain) or not out:
             out.append([])
             calls = {}
