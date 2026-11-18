@@ -4,6 +4,7 @@ import asyncio
 import fcntl
 import json
 import random
+import subprocess
 
 import pytest
 
@@ -406,9 +407,80 @@ def public(cls) -> set[str]:
 
 def test_the_fake_log_has_no_call_the_real_log_lacks(fake_log):
     helpers = {"say", "ask", "write", "hold", "waiting", "claims", "authors", "version"}
-    assert public(type(fake_log)) - helpers <= public(Log) | {"name", "project"}
+    assert public(type(fake_log)) - helpers <= public(Log) | {"name", "project", "dir"}
 
 
 async def test_the_fake_writer_has_no_call_the_real_writer_lacks(fake_log):
     async with await fake_log.claim(Request(0)) as writer:
         assert public(type(writer)) <= public(Writer)
+
+
+async def test_files_are_read_at_the_head_or_at_any_commit():
+    log = Log("p")
+    async with await log.claim(Request(0)) as writer:
+        writer.put("a", b"1")
+        writer.put("f/b", b"2")
+        old = await writer.commit()
+        writer.put("a", b"changed")
+        writer.put("f", None)
+        await writer.commit()
+        writer.put("uncommitted", b"")
+        assert (log.files(), log.file("a")) == (["a"], b"changed")
+        assert (log.files(old), log.file("a", old), log.file("f/b", old)) == (["a", "f/b"], b"1", b"2")
+
+
+async def test_tree_gives_the_id_of_a_folder_or_of_all_files():
+    log = Log("p")
+    async with await log.claim(Request(0)) as writer:
+        writer.put("t/x", b"")
+        writer.put("t/deep/y", b"")
+        await writer.commit()
+    assert log.tree("t") == raw_git(log, "rev-parse", f"{log.head()}:files/t")
+    assert log.tree() == raw_git(log, "rev-parse", f"{log.head()}:files")
+    assert log.files() == ["t/deep/y", "t/x"]
+
+
+async def test_what_is_not_there_reads_as_none():
+    log = Log("p")
+    assert (log.files(), log.file("a"), log.tree()) == ([], None, None)
+    async with await log.claim(Request(0)) as writer:
+        writer.put("f/a", b"")
+        await writer.commit()
+    for name, value in [
+        ("a missing file", log.file("x")),
+        ("a folder", log.file("f")),
+        ("a file as a tree", log.tree("f/a")),
+        ("a missing folder", log.tree("x")),
+    ]:
+        assert value is None, name
+    with pytest.raises(ValueError):
+        log.file("../a")
+
+
+def test_blobs_and_trees_written_through_the_log_read_back():
+    log = Log("p")
+    a, b = log.write_blobs([b"a", b"b"])
+    entries = {"x": ("100644", a), "d/y": ("100755", b)}
+    tree = log.write_tree(entries)
+    assert log.read_tree(tree) == entries
+    assert (log.blob(a), log.blob(b)) == (b"a", b"b")
+
+
+def test_an_unknown_blob_or_tree_is_refused():
+    log = Log("p")
+    (blob,) = log.write_blobs([b"a"])
+    tree = log.write_tree({"x": ("100644", blob)})
+    for name, read in [
+        ("a missing blob", lambda: log.blob("1" * 40)),
+        ("a tree as a blob", lambda: log.blob(tree)),
+        ("a missing tree", lambda: log.read_tree("1" * 40)),
+        ("a blob as a tree", lambda: log.read_tree(blob)),
+    ]:
+        with pytest.raises(ValueError):
+            read()
+            pytest.fail(name)
+
+
+def raw_git(log: Log, *args: str) -> str:
+    command = ["git", "--git-dir", str(log.repo), *args]
+    return subprocess.run(command, capture_output=True, text=True, check=True).stdout.strip()

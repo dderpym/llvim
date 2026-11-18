@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import hashlib
 import inspect
 import shutil
 import subprocess
@@ -7,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from llvim.core import LLVIM, Message, Request, Snapshot
+from llvim.core import LLVIM, GitError, Message, Request, Snapshot
 from llvim.std.conversation import Entry, encode
 from llvim.std.panels.logviewer.box import Host
 
@@ -129,12 +130,16 @@ class FakeOffer:
 class FakeLog:
     """The calls of `llvim.core.Log` that std uses, in memory, and helpers that put it in the state a test needs:
     `say` (a committed message), `ask` (a user message and a cue for the model), `write` (an uncommitted one), `hold` (someone
-    else holds the log), `waiting` (who waits). `tests/core/test_log.py` checks it has no call the real log lacks."""
+    else holds the log), `waiting` (who waits). `tests/core/test_log.py` checks it has no call the real log lacks.
+    Blobs and trees are kept in memory. A blob's id is git's, since a caller may work one out itself; a tree's is not."""
 
     name = "main"
 
-    def __init__(self):
+    def __init__(self, dir: Path | None = None):
         self.project = Path.cwd()
+        self.dir = dir
+        self._blobs: dict[str, bytes] = {}
+        self._trees: dict[str, dict[str, tuple[str, str]]] = {}
         self._commits: list[tuple[str, dict[int, bytes]]] = []
         self._live: dict[int, bytes] | None = None
         self._next = 0
@@ -199,6 +204,40 @@ class FakeLog:
     def holder(self) -> Request | None:
         return self._holder
 
+    def write_blobs(self, sources) -> list[str]:
+        ids = []
+        for source in sources:
+            content = source if isinstance(source, bytes) else Path(source).read_bytes()
+            id = hashlib.sha1(b"blob %d\0" % len(content) + content).hexdigest()
+            self._blobs[id] = content
+            ids.append(id)
+        return ids
+
+    def blob(self, id: str) -> bytes:
+        if id not in self._blobs:
+            raise ValueError(f"no such blob: {id!r}")
+        return self._blobs[id]
+
+    def write_tree(self, entries: dict[str, tuple[str, str]]) -> str | None:
+        flat = {}
+        for path, (mode, id) in entries.items():
+            if mode == "040000":
+                flat |= {f"{path}/{inside}": entry for inside, entry in self.read_tree(id).items()}
+            elif id in self._blobs:
+                flat[path] = (mode, id)
+            else:
+                raise GitError("git would not make a tree", f"{id} is missing")
+        if not flat:
+            return None
+        id = hashlib.sha1(repr(sorted(flat.items())).encode()).hexdigest()
+        self._trees[id] = flat
+        return id
+
+    def read_tree(self, id: str) -> dict[str, tuple[str, str]]:
+        if id not in self._trees:
+            raise ValueError(f"no such tree: {id!r}")
+        return dict(self._trees[id])
+
     def queue(self) -> list[Request]:
         waiting = self.waiting + [request for _, request in sorted(self._waiters, key=lambda w: w[0])]
         return ([self._holder] if self._holder else []) + sorted(waiting, key=lambda r: -r.priority)
@@ -247,9 +286,9 @@ class FakeLog:
 
 
 @pytest.fixture
-def fake_log() -> FakeLog:
-    """A log in memory, standing in for `llvim.core.Log`."""
-    return FakeLog()
+def fake_log(tmp_path) -> FakeLog:
+    """A log in memory, standing in for `llvim.core.Log`. Its folder is empty and private to the test."""
+    return FakeLog(tmp_path / "log")
 
 
 # --- the viewer's side: a host and a screen ---

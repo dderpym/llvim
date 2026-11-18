@@ -75,6 +75,7 @@ One page per source file, explaining why it is shaped the way it is:
     - [`std/providers/openai.py`](docs/std/providers/openai.md)
     - [`std/providers/openai_settings.py`](docs/std/providers/openai_settings.md)
   - [`std/context.py`](docs/std/context.md)
+  - [`std/store.py`](docs/std/store.md)
   - [`std/tmux.py`](docs/std/tmux.md)
   - [`std/tools/`](docs/std/tools/tools.md)
     - [`std/tools/registry.py`](docs/std/tools/registry.md)

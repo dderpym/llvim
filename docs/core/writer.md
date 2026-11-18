@@ -1,6 +1,6 @@
 # `core/writer.py`: Writer, Moved, Released, Committing
 
-A `Writer` is the only way to change a log. You get it from `Log.claim` ([log.md](log.md)) and keep it until you release it. Writes are uncommitted until `commit()`, and readers see them as they happen.
+A `Writer` is the only way to change a log, its messages and its files. You get it from `Log.claim` ([log.md](log.md)) and keep it until you release it. Writes are uncommitted until `commit()`, and readers see them as they happen.
 
 ```python
 async with await log.claim(Request(0)) as writer:
@@ -10,14 +10,23 @@ async with await log.claim(Request(0)) as writer:
         if writer.outranked():         # or await writer.outranked_changed() alongside the reply
             break
     await writer.commit(author=Author("gpt-5", "model@example.com"), message="reply")
+
+async with await log.claim(Request(0)) as writer:
+    writer.put("notes/today", b"...")                    # one file
+    writer.put_tree("snapshot", tree)                    # a whole folder, e.g. from std/store.py
+    await writer.commit()
 ```
 
 - `append(content)`: adds a message after the last one and returns its id.
 - `extend(id, chunk)`, `replace(id, content)`, `remove(id)`: a missing id raises `KeyError`.
-- `restore(to)`: makes the log look like commit `to` again, as an uncommitted change on top. An unknown commit raises `ValueError`; while a commit runs, `Committing`.
+- `put(path, data)`: sets the file at `path` under `files/` to `data` in the next commit; `None` removes the file or folder there. A bad path raises `ValueError`.
+- `put_tree(path, tree)`: sets the folder at `path` (`""`: all of `files/`) to `tree`; `None` removes it. A tree the repo lacks raises `ValueError`.
+  - A later put to a path replaces an earlier uncommitted one there and under it;
+  - a put inside a folder given to `put_tree` lands on top of that tree.
+- `restore(to)`: makes the log look like commit `to` again, messages and files, as an uncommitted change on top. An unknown commit raises `ValueError`; while a commit runs, `Committing`.
 - `commit(*, author=LLVIM, message="")`, async: the commit says `author` wrote it, with `message`;
   - writes since the last commit: a new commit, which becomes the head;
-  - nothing new: the head, unchanged, whatever the author and message;
+  - nothing new: the head, unchanged, whatever the author and message. A put file is something new, even with no message written;
   - an empty log: a first commit, even with no writes;
   - something else moved the head: raises `Moved`. The head is untouched and the writes stay uncommitted;
   - git would not commit or move the head for another reason (a lock file left by a git that died, a full disk): raises `GitError` ([git.md](git.md)). The head is untouched, the writes stay uncommitted, and the commit can be tried again once the cause is gone;
@@ -32,8 +41,9 @@ async with await log.claim(Request(0)) as writer:
 
 ## Using it
 
+- `put` stores the content in the repo at once, one git process (about 1 ms), so a commit holds only ids. Content of a put that is never committed stays in the repo until `git gc`. Readers see a put only once it is committed ([log.md](log.md)).
 - A Writer that is never released holds the log until its process exits or the Writer is garbage collected. Use `async with await log.claim(...)`.
-- Other tasks may go on writing while a commit runs. Those writes are not in the commit; they stay uncommitted, and readers go on seeing them. `restore` is refused while a commit runs, since it would change what the commit is writing.
+- Other tasks may go on writing while a commit runs. Those writes are not in the commit; they stay uncommitted, and readers go on seeing them. Puts too: they go in the next commit, and if the commit fails, they stay on top of the puts it was carrying. `restore` is refused while a commit runs, since it would change what the commit is writing.
 - Each write is one write to the journal file. It costs no git process, so streaming chunk by chunk is cheap. A commit costs two git processes (`fast-import` and `update-ref`), about 6 ms whatever the log's length. A restore reads the commit it restores, and is linear in its length.
 - After `Moved`, every later commit of that Writer fails too. Release it and claim again.
 - `outranked_changed()` may return when nothing that matters changed (a waiter of lower priority joined): look at `outranked()`
@@ -42,7 +52,10 @@ async with await log.claim(Request(0)) as writer:
 ## Why it is this way
 
 - **Uncommitted, not autosaved.** A reply that is cut off, or whose process dies, leaves no half-message in history. A commit is a point the caller chose.
-- **Restore adds a commit, it does not reset.** The commits after `to` stay in history, so a restore can be undone by another restore. The next id is kept as the highest seen, so ids from the undone commits are not given out again.
+- **A put is stored when it is made, not when it is committed.** A large file would otherwise sit in the Writer's memory until the commit, and then again in fast-import's input. Stored at once, the Writer and its journal keep an id.
+- **Puts are kept in order, one per path.** A later put at a path drops the earlier ones at and under it, since it would overwrite them. What is left is applied in order, so a file put inside a `put_tree` folder lands on top of it: a caller can put a captured tree and then change one file in it, without building a new tree.
+- **Puts are not refused while a commit runs.** For the same reason as messages (below): a caller putting files in one task must not stop for a commit in another. `put` checks only that the Writer is held.
+- **Restore adds a commit, it does not reset.** The commits after `to` stay in history, so a restore can be undone by another restore. The next id is kept as the highest seen, so ids from the undone commits are not given out again. The files come back too, as one change of all of `files/`, or none if they are the same.
 - **The Writer never touches git.** It keeps the state it is building (the messages, which ones changed since the last commit, and the bucket of each committed message) and hands a commit to `Log`, which has [git.py](git.md) write it. Git in one file means one place that knows the on-disk format.
 - **A commit costs the same however long the log is.** The Writer keeps the set of changed ids, so a commit compares nothing it did not change. It keeps the bucket of every message, so the log does not read the base commit's trees to find them.
 - **A cancelled commit finishes the git step.** Cancelling the wait does not stop git: an `update-ref` already running moves the head anyway. A Writer that gave up on it would not know the head moved, and every later commit would fail with `Moved`. So the commit waits for git, a few milliseconds, and records where the head ended. Killing git on cancel was rejected: the ref may already be moved by then, and the Writer would still have to find out which.

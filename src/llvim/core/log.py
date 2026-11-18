@@ -3,7 +3,7 @@
 import asyncio
 import os
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -64,6 +64,38 @@ class Log:
             return Snapshot(commit, tuple(ordered(self._read_tree(commit).contents)))
         with self._lock:
             return self._read_live().snapshot()
+
+    def files(self, at: Commit | None = None) -> list[str]:
+        """Every file path under files/ at `at` (default: the head). Only committed files are read."""
+        tree = self.tree(at=at)
+        return [path for path, mode, _ in git.walk(self._objects, tree) if mode != "160000"] if tree else []
+
+    def file(self, path: str, at: Commit | None = None) -> bytes | None:
+        found = self._object(git.file_path(path), at)
+        return found[2] if found and found[1] == "blob" else None
+
+    def tree(self, path: str = "", at: Commit | None = None) -> str | None:
+        """The tree id of files/<path> ("": all of files/), or None if no folder is there."""
+        found = self._object(git.file_path(path, root=True), at)
+        return found[0] if found and found[1] == "tree" else None
+
+    def write_blobs(self, sources: Iterable[bytes | os.PathLike]) -> list[str]:
+        """Store each content, or each file's content, in the repo; their ids, in order. One git for the batch."""
+        return git.write_blobs(self.repo, sources)
+
+    def blob(self, id: str) -> bytes:
+        found = self._objects.lookup(id) if id and "\n" not in id else None
+        if found is None or found[1] != "blob":
+            raise ValueError(f"no such blob: {id!r}")
+        return found[2]
+
+    def write_tree(self, entries: dict[str, tuple[str, str]]) -> str | None:
+        """The tree of `entries`, path -> (mode, object id), folders made from the paths; None for no entries."""
+        return git.write_tree(self.repo, entries)
+
+    def read_tree(self, id: str) -> dict[str, tuple[str, str]]:
+        """Every entry under the tree `id` that is not a folder: path -> (mode, object id)."""
+        return {path: (mode, entry) for path, mode, entry in git.walk(self._objects, self._tree_id(id))}
 
     async def changes(self) -> AsyncIterator[Snapshot]:
         """The log now, then again each time it may have changed. Changes made while you were busy come as one
@@ -147,8 +179,21 @@ class Log:
         where: dict[int, str],
         author: Author,
         message: str,
+        files: dict[str, git.FileChange],
     ) -> Commit | None:
-        return await git.commit(self.repo, self.ref, base, changes, next_id, where, self.bucket, author, message)
+        return await git.commit(self.repo, self.ref, base, changes, next_id, where, self.bucket, author, message, files)
+
+    def _tree_id(self, tree: str) -> str:
+        found = self._objects.lookup(f"{tree}^{{tree}}") if tree and "\n" not in tree else None
+        if found is None:
+            raise ValueError(f"no such tree: {tree!r}")
+        return found[0]
+
+    def _object(self, path: str, at: Commit | None) -> tuple[str, str, bytes] | None:
+        commit = self.head() if at is None else self._resolve(at)
+        if commit is None:
+            return None
+        return self._objects.lookup(f"{commit}:files/{path}" if path else f"{commit}:files")
 
     def _resolve(self, commit: Commit) -> Commit:
         found = self._objects.get(f"{commit}^{{commit}}") if commit and "\n" not in commit else None

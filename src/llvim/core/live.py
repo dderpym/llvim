@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from llvim.core.git import Commit
 
 RECORD = struct.Struct(">cQQ")  # op, message id, payload length
+FILE_OPS = (b"F", b"T")  # a file or folder put under files/: "path\0object id", no id for a removal; not for readers
 
 type Contents = dict[int, bytes]
 
@@ -77,7 +78,7 @@ class View:
             self.offset += RECORD.size + len(payload)
             if op == b"B":
                 self.applies = (payload.decode() or None) == self.head
-            elif self.applies:
+            elif self.applies and op not in FILE_OPS:
                 self._touched.update(self.contents if op == b"R" else (id,))
                 apply(self.contents, op, id, payload, contents_at)
                 self._touched.update(self.contents if op == b"R" else ())

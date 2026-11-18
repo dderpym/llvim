@@ -1,4 +1,4 @@
-# `core/git.py`: GitError, Author, commit, Tree, repack
+# `core/git.py`: GitError, Author, commit, Tree, walk, repack
 
 The repo of a project, and the only code that runs git or knows how a log is laid out in it. [log.md](log.md) calls it; nothing else does.
 
@@ -14,12 +14,17 @@ tree.contents                               # {0: b"hello"}
 - `Author(name, email="")`: who a commit says wrote it. A name that is empty, or a name or email that git cannot record (`<`, `>`, a line break, a NUL), raises `ValueError`. `LLVIM` is the default author, and every commit's committer.
 - `init(repo)`: makes a bare repo if there is none. Raises `GitError` if git cannot.
 - `target(repo, ref)`: the commit a ref points at, or `None`.
-- `commit(repo, ref, base, changes, next_id, where, bucket, author, message)`, async:
+- `commit(repo, ref, base, changes, next_id, where, bucket, author, message, files=None)`, async:
   - `ref` still at `base`: a new commit with `changes` (`None` for a removed message), and `ref` moves to it;
   - `ref` moved: `None`. The ref is untouched;
   - git would not make the commit or move the ref for another reason (a lock file left by a git that died, a full disk): raises `GitError`. The ref is untouched.
+  - `files` maps a path under `files/` (`""`: `files/` itself) to `(mode, object id)`, or to `None` to remove what is there. They are applied in order, so a file put inside a folder set before it lands on top of that folder.
+- `write_blobs(repo, sources)`: stores each `bytes` or file and returns their ids, through one `git hash-object --stdin-paths`. Content given as bytes is staged in scratch files, since git reads from paths.
+- `write_tree(repo, entries)`: the tree of `entries` (path to mode and id), each folder written with one `git mktree --batch` kept running. `None` for no entries.
+- `file_path(path, root=False)`: `path` if it can name a file under `files/`. An empty part, `.`, `..`, `.git`, a line break or a NUL raises `ValueError`. `root=True` allows `""`.
+- `walk(objects, tree)`: the path, mode and id of every entry under a tree that is not a folder, submodules included.
 - `move(repo, ref, to, start)`, async: points `ref` at `to` if it is still at `start` (`None`: if it does not exist). Raises `GitError` otherwise.
-- `Objects(repo).get(name)`: the id and content of an object, through one running `git cat-file --batch`.
+- `Objects(repo).get(name)`: the id and content of an object, through one running `git cat-file --batch`. `lookup(name)` adds its type.
 - `Tree.read(objects, commit, last)`: a commit's messages, the bucket of each, and its next free id. Pass the last tree read to reuse what did not change.
 - `repack(repo)`: drops old scratch refs and merges packs. A commit runs it in a background thread when the repo is untidy.
 
@@ -33,6 +38,8 @@ tree.contents                               # {0: b"hello"}
 
 - **A commit holds `messages/<bucket>/<id>` and `next`.** One blob per message, so a commit stores only the messages that changed. Messages are grouped in buckets of `bucket` ids, named by their first id (`messages/500/512`). Git rewrites every tree on the path of a changed file, so with one flat folder a commit would rewrite a tree with an entry for every message, and writing would get slower as the log grew. With buckets it rewrites one bucket and the short list of buckets.
 - **The bucket size can change.** A message stays in the bucket it was first written to. Only new messages use the current size, and reading never computes a bucket, it lists them. So logs written with different sizes, or with several sizes, read and write correctly.
+- **Files go in `files/`, beside `messages/` and `next`.** Every commit's tree carries them, so a commit that changes none keeps its base's: `from <base>` in fast-import copies the base tree. A file is a blob the caller already stored and a folder is a tree, both referred to by id (`M 100644 <blob>`, `M 040000 <tree>`), so a commit never holds a large file in memory or in its script. A folder of any size is put with one line.
+- **Paths are quoted in the script.** fast-import reads a path that starts with `"` as quoted, and so would misread such a name. Quoting every path makes any name mean itself.
 - **`next` is the next free id.** It is kept so that an id is never reused, even after its message is removed. Ids are not taken from the message count, because a remove would then give the same id to two messages.
 - **A tree is read bucket by bucket.** A bucket whose git tree did not change since the last read is reused without asking git, and inside a changed bucket a message whose blob did not change is reused.
 - **A commit moves the ref only if nothing else moved it.** The commit is built on a scratch ref. The branch moves in one `update-ref` transaction that checks the branch still points at the commit the writes started from, and deletes the scratch ref. Holding the claim does not stop raw git, or another program, from moving the branch. Overwriting would silently drop its commit. When `update-ref` fails, the ref is read again: `None` only if it really is somewhere else, and otherwise git's own error. Taking every failure for a race would send a writer to release and claim again over a stale `main.lock`, which a new claim does not remove, so every commit after it would fail the same way. `fast-import` was not allowed to move the branch itself: it only refuses moves that are not fast-forward, so it would accept a branch moved backwards.

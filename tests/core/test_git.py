@@ -21,9 +21,9 @@ def repo(tmp_path):
     return repo
 
 
-def raw(repo, *args: str, **env: str) -> str:
+def raw(repo, *args: str, input: str = "", **env: str) -> str:
     command = ["git", "--git-dir", str(repo), *args]
-    done = subprocess.run(command, input="", capture_output=True, text=True, check=True, env=git.env() | env)
+    done = subprocess.run(command, input=input, capture_output=True, text=True, check=True, env=git.env() | env)
     return done.stdout.strip()
 
 
@@ -181,3 +181,100 @@ async def test_repacking_drops_scratch_refs_left_by_commits_that_died(repo):
         raw(repo, "update-ref", f"refs/llvim/scratch/{name}", made)
     git.repack(repo)
     assert raw(repo, "for-each-ref", "--format=%(refname)", "refs/llvim/") == "refs/llvim/scratch/fresh"
+
+
+async def test_a_commit_applies_file_changes_in_order_on_top_of_its_base(repo):
+    blob = raw(repo, "hash-object", "-w", "--stdin")
+    tree = raw(repo, "mktree", input=f"100644 blob {blob}\tx\n")
+    first = await git.commit(repo, REF, None, {}, 0, {}, 500, LLVIM, "", {"old": ("100644", blob)})
+    files = {
+        "t": ("040000", tree),
+        "t/y": ("100644", blob),
+        'a "quoted" path': ("100644", blob),
+        "old": None,
+    }
+    made = await git.commit(repo, REF, first, {}, 0, {}, 500, LLVIM, "", files)
+    paths = raw(repo, "ls-tree", "-r", "--name-only", "-z", made).rstrip("\0").split("\0")
+    assert paths == ['files/a "quoted" path', "files/t/x", "files/t/y", "next"]
+
+
+async def test_a_commit_with_no_file_changes_keeps_the_files_of_its_base(repo):
+    blob = raw(repo, "hash-object", "-w", "--stdin")
+    first = await git.commit(repo, REF, None, {}, 0, {}, 500, LLVIM, "", {"a": ("100644", blob)})
+    second = await commit(repo, {0: b"m"}, base=first)
+    assert raw(repo, "rev-parse", f"{first}:files") == raw(repo, "rev-parse", f"{second}:files")
+
+
+async def test_removing_the_root_removes_every_file(repo):
+    blob = raw(repo, "hash-object", "-w", "--stdin")
+    first = await git.commit(repo, REF, None, {}, 0, {}, 500, LLVIM, "", {"a/b": ("100644", blob)})
+    made = await git.commit(repo, REF, first, {}, 0, {}, 500, LLVIM, "", {"": None, "c": ("100644", blob)})
+    assert raw(repo, "ls-tree", "-r", "--name-only", made).split() == ["files/c", "next"]
+
+
+def test_walk_gives_every_entry_of_a_tree_but_its_folders(repo):
+    blob = raw(repo, "hash-object", "-w", "--stdin")
+    inner = raw(repo, "mktree", input=f"100644 blob {blob}\tb\n120000 blob {blob}\tlink\n")
+    tree = raw(repo, "mktree", "--missing", input=f"040000 tree {inner}\tdir\n160000 commit {'1' * 40}\tsub\n")
+    assert list(git.walk(git.Objects(repo), tree)) == [
+        ("dir/b", "100644", blob),
+        ("dir/link", "120000", blob),
+        ("sub", "160000", "1" * 40),
+    ]
+
+
+def test_written_blobs_are_in_the_repo_in_the_order_given(repo, tmp_path):
+    (tmp_path / "file").write_text("from a file")
+    (tmp_path / "a\nname").write_text("odd name")
+    (tmp_path / "link").symlink_to(tmp_path / "file")
+    sources = [b"content", tmp_path / "file", tmp_path / "a\nname", tmp_path / "link", b""]
+    ids = git.write_blobs(repo, sources)
+    assert [raw(repo, "cat-file", "blob", id) for id in ids] == [
+        "content",
+        "from a file",
+        "odd name",
+        "from a file",
+        "",
+    ]
+    assert git.write_blobs(repo, []) == []
+
+
+def test_a_file_that_cannot_be_read_is_not_stored(repo, tmp_path):
+    with pytest.raises(GitError):
+        git.write_blobs(repo, [tmp_path / "missing"])
+
+
+def test_a_tree_is_made_with_the_folders_its_paths_need(repo):
+    a, b = git.write_blobs(repo, [b"a", b"b"])
+    inner = git.write_tree(repo, {"x": ("100644", a)})
+    entries = {"top": ("100755", a), "deep/er/f": ("100644", b), "link": ("120000", b), "sub": ("040000", inner)}
+    tree = git.write_tree(repo, entries)
+    listing = raw(repo, "ls-tree", "-r", "--format=%(objectmode) %(path)", tree).splitlines()
+    assert listing == ["100644 deep/er/f", "120000 link", "100644 sub/x", "100755 top"]
+
+
+def test_a_tree_of_nothing_is_none(repo):
+    assert git.write_tree(repo, {}) is None
+
+
+def test_a_tree_git_cannot_make_is_refused(repo):
+    (blob,) = git.write_blobs(repo, [b""])
+    cases = [
+        ("a path under a file", {"a": ("100644", blob), "a/b": ("100644", blob)}, ValueError),
+        ("a file over a folder", {"a/b": ("100644", blob), "a": ("100644", blob)}, ValueError),
+        ("a bad path", {"../a": ("100644", blob)}, ValueError),
+        ("a missing object", {"a": ("100644", "1" * 40)}, GitError),
+    ]
+    for case, entries, error in cases:
+        with pytest.raises(error):
+            git.write_tree(repo, entries)
+            pytest.fail(case)
+
+
+def test_a_path_that_cannot_name_a_file_is_refused():
+    for path in ["", "/a", "a/", "a//b", ".", "a/..", ".git", "x/.git/y", "a\nb", "a\0b"]:
+        with pytest.raises(ValueError):
+            git.file_path(path)
+            pytest.fail(f"accepted {path!r}")
+    assert git.file_path("", root=True) == ""
+    assert git.file_path("a b/.c") == "a b/.c"

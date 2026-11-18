@@ -5,15 +5,19 @@ import fcntl
 import os
 import secrets
 import subprocess
+import tempfile
 import threading
 import time
 import weakref
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
 type Commit = str
+type FileChange = tuple[str, str] | None  # (mode, object id) of what goes at a path under files/; None removes it
+
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
 class GitError(Exception):
@@ -97,6 +101,79 @@ async def run(repo: Path, *args: str, input: bytes | None = None) -> bytes:
     return out
 
 
+def write_blobs(repo: Path, sources: Iterable[bytes | os.PathLike]) -> list[str]:
+    """Store each content, or each file's content (a link is followed), and return their ids in order. One git for
+    the batch: it reads files from disk itself, so content is staged in scratch files and large files are never
+    held in memory."""
+    with tempfile.TemporaryDirectory(prefix="llvim-blobs-") as scratch:
+        paths = []
+        for i, source in enumerate(sources):
+            path = Path(scratch) / str(i)
+            if isinstance(source, bytes | bytearray):
+                path.write_bytes(source)
+            elif "\n" in str(Path(source).absolute()):  # git reads one path per line
+                path.symlink_to(Path(source).absolute())
+            else:
+                path = Path(source).absolute()
+            paths.append(path)
+        if not paths:
+            return []
+        command = ["git", "--git-dir", str(repo), "hash-object", "-w", "--no-filters", "--stdin-paths"]
+        listing = b"".join(os.fsencode(path) + b"\n" for path in paths)
+        done = subprocess.run(command, input=listing, capture_output=True, env=env())
+    if done.returncode:
+        raise GitError("git would not store a file", done.stderr.decode(errors="replace"))
+    return done.stdout.decode().split()
+
+
+def write_tree(repo: Path, entries: dict[str, tuple[str, str]]) -> str | None:
+    """The tree holding `entries`, path -> (mode, object id), with the folders their paths make; None for no entries.
+    ValueError if a path is bad or is both a file and a folder; GitError if an object is missing."""
+    root: dict = {}
+    for path, entry in entries.items():
+        *folders, name = file_path(path).split("/")
+        node = root
+        for folder in folders:
+            node = node.setdefault(folder, {})
+            if not isinstance(node, dict):
+                raise ValueError(f"{path!r} is under a file")
+        if name in node:
+            raise ValueError(f"{path!r} is a folder of other entries")
+        node[name] = entry
+    if not root:
+        return None
+    command = ["git", "--git-dir", str(repo), "mktree", "-z", "--batch"]
+    pipe = subprocess.PIPE
+    with subprocess.Popen(command, stdin=pipe, stdout=pipe, stderr=pipe, env=env()) as process:
+
+        def write(node: dict) -> str:
+            lines = []
+            for name, child in node.items():
+                mode, id = ("040000", write(child)) if isinstance(child, dict) else child
+                kind = {"040000": "tree", "160000": "commit"}.get(mode, "blob")
+                lines.append(os.fsencode(f"{mode} {kind} {id}\t{name}") + b"\0")
+            process.stdin.write(b"".join(lines) + b"\0")
+            process.stdin.flush()
+            made = process.stdout.readline().strip().decode()
+            if not made:
+                raise GitError("git would not make a tree", process.stderr.read().decode(errors="replace"))
+            return made
+
+        try:
+            return write(root)
+        finally:
+            process.stdin.close()
+
+
+def file_path(path: str, *, root: bool = False) -> str:
+    """`path` if it can name a file under files/; ValueError if not. `root`: "" is allowed, for files/ itself."""
+    if root and path == "":
+        return path
+    if not isinstance(path, str) or set(path) & {"\n", "\0"} or {"", ".", "..", ".git"} & set(path.split("/")):
+        raise ValueError(f"not a file path: {path!r}")
+    return path
+
+
 async def move(repo: Path, ref: str, to: Commit, start: Commit | None, *, then: str = "") -> None:
     """Point `ref` at `to` if it is still at `start` (None: if it does not exist). GitError if git would not."""
     check = f"update {ref} {to} {start}" if start else f"create {ref} {to}"
@@ -116,15 +193,19 @@ async def commit(
     bucket: int,
     author: Author,
     message: str,
+    files: dict[str, FileChange] | None = None,
 ) -> Commit | None:
     """Commit `changes` (None: removed) on top of `base`, and move `ref` there if it is still at `base`.
     None if it is not; GitError if git would not commit or move it for another reason, such as a lock file left by a
     git that died.
 
     `where` is the bucket of each message in `base`; on success it is updated to the new commit. The caller keeps it, so
-    a commit costs the same however long the log is."""
+    a commit costs the same however long the log is.
+
+    `files` are applied in order to files/, each path relative to it ("": files/ itself), so a change inside a path
+    an earlier one set applies on top of it."""
     scratch = f"refs/llvim/scratch/{secrets.token_hex(8)}"
-    script = _script(scratch, base, changes, next_id, where, bucket, author, message)
+    script = _script(scratch, base, changes, next_id, where, bucket, author, message, files or {})
     made = (await run(repo, "fast-import", "--quiet", input=script)).decode().strip()
     try:
         await move(repo, ref, made, base, then=f"delete {scratch}\n")
@@ -153,6 +234,7 @@ def _script(
     bucket: int,
     author: Author,
     message: str,
+    files: dict[str, FileChange],
 ) -> bytes:
     when, text, next_text = f"{int(time.time())} +0000", message.encode(), str(next_id).encode()
     script = [
@@ -170,9 +252,18 @@ def _script(
             script += [f"M 100644 inline {path}".encode(), f"data {len(content)}".encode(), content]
         elif id in where:
             script.append(f"D {path}".encode())
+    for path, change in files.items():
+        quoted = _quote(f"files/{path}" if path else "files")
+        line = f"D {quoted}" if change is None else f"M {change[0]} {change[1]} {quoted}"
+        script.append(os.fsencode(line))
     script += [b"M 100644 inline next", f"data {len(next_text)}".encode(), next_text]
     script += [b"get-mark :1", b""]
     return b"\n".join(script)
+
+
+def _quote(path: str) -> str:
+    """A path as fast-import reads it: quoted, so one starting with `"` or holding spaces means what it says."""
+    return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _bucket(id: int, size: int) -> str:
@@ -219,19 +310,24 @@ class Objects:
 
     def get(self, name: str) -> tuple[str, bytes] | None:
         """The id and content of the object `name` names, or None."""
+        found = self.lookup(name)
+        return (found[0], found[2]) if found else None
+
+    def lookup(self, name: str) -> tuple[str, str, bytes] | None:
+        """The id, type and content of the object `name` names, or None."""
         with self._lock:
             if self._process is None:
                 command = ["git", "--git-dir", str(self._repo), "cat-file", "--batch"]
                 pipe = subprocess.PIPE
                 self._process = subprocess.Popen(command, stdin=pipe, stdout=pipe, stderr=subprocess.DEVNULL, env=env())
                 weakref.finalize(self, _stop, self._process)
-            self._process.stdin.write(name.encode() + b"\n")
+            self._process.stdin.write(os.fsencode(name) + b"\n")
             self._process.stdin.flush()
             header = self._process.stdout.readline().split()
             if len(header) != 3:
                 return None
             content = self._process.stdout.read(int(header[2]) + 1)[:-1]
-            return header[0].decode(), content
+            return header[0].decode(), header[1].decode(), content
 
 
 def _stop(process: subprocess.Popen) -> None:
@@ -242,11 +338,28 @@ def _stop(process: subprocess.Popen) -> None:
 
 def _entries(tree: bytes) -> Iterator[tuple[str, str]]:
     """The names and object ids in a raw git tree."""
+    for _, name, id in _modes(tree):
+        yield name, id
+
+
+def _modes(tree: bytes) -> Iterator[tuple[str, str, str]]:
+    """The modes, names and object ids in a raw git tree."""
     at = 0
     while at < len(tree):
-        nul = tree.index(b"\0", at)
-        yield tree[tree.index(b" ", at) + 1 : nul].decode(), tree[nul + 1 : nul + 21].hex()
+        space, nul = tree.index(b" ", at), tree.index(b"\0", at)
+        yield tree[at:space].decode(), os.fsdecode(tree[space + 1 : nul]), tree[nul + 1 : nul + 21].hex()
         at = nul + 21
+
+
+def walk(objects: Objects, tree: str, prefix: str = "") -> Iterator[tuple[str, str, str]]:
+    """The path, mode and id of every entry under `tree` that is not a folder, in git's order."""
+    found = objects.lookup(tree)
+    assert found is not None, f"{tree} is missing from the repo"
+    for mode, name, id in _modes(found[2]):
+        if mode == "40000":
+            yield from walk(objects, id, f"{prefix}{name}/")
+        else:
+            yield prefix + name, mode, id
 
 
 type Bucket = tuple[str, dict[int, tuple[str, bytes]]]  # (tree id, {message id: (blob id, content)})

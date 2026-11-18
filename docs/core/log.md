@@ -1,6 +1,6 @@
 # `core/log.py`: Log
 
-A `Log` is a view of one log: a sequence of messages kept as a git branch. Anyone can read it and watch it change. To change it, claim a [Writer](writer.md). The log hands out one Writer at a time, by priority and then by arrival.
+A `Log` is a view of one log: a sequence of messages, and a set of files, kept as a git branch. Anyone can read it and watch it change. To change it, claim a [Writer](writer.md). The log hands out one Writer at a time, by priority and then by arrival.
 
 ```python
 log = Log("/home/me/code/myproject")        # the log "main" of the project
@@ -11,7 +11,7 @@ async for snapshot in log.changes():        # now, then after every change
     show(snapshot.messages, snapshot.uncommitted, snapshot.removed)
 ```
 
-`log.py` is the public face of core. It puts together the four modules under it: [git.py](git.md) (the repo), [live.py](live.md) (uncommitted writes), [queue.py](queue.md) (claims) and [watch.py](watch.md) (file events). A caller imports everything from `llvim.core` ([core.md](core.md)), not from these files.
+`log.py` is the public face of core. It puts together the modules under it: [git.py](git.md) (the repo), [live.py](live.md) (uncommitted writes), [queue.py](queue.md) (claims) and [watch.py](watch.md) (file events). A caller imports everything from `llvim.core` ([core.md](core.md)), not from these files.
 
 > **`claim` is awaited, then entered:** `async with await log.claim(request) as writer`. Leaving out the `await` (`async with log.claim(request)`) fails at once with `TypeError: 'coroutine' object does not support the asynchronous context manager protocol`.
 
@@ -24,6 +24,14 @@ async for snapshot in log.changes():        # now, then after every change
 - `read(at)`, a `Snapshot` of `head`, `messages`, `uncommitted` and `removed`:
   - no `at`: the head plus the holder's uncommitted writes ([live.md](live.md));
   - a commit: exactly what it holds, with nothing uncommitted. An unknown commit raises `ValueError`.
+- `files(at=None)`: every file path under `files/` at `at` (default: the head), in git's order. `[]` for an empty log.
+- `file(path, at=None)`: one file's content, or `None` if no file is there (a folder is not a file).
+- `tree(path="", at=None)`: the tree id of the folder `files/<path>` (`""`: all of `files/`), or `None` if no folder is there.
+  These three read commits only: the holder's uncommitted puts are not in them. A bad path raises `ValueError`, an unknown commit too.
+- `write_blobs(sources)`: stores each `bytes`, or each file's content (a link is followed), and returns their ids in order. One git process for the batch. A file git cannot read raises `GitError`.
+- `blob(id)`: a blob's content. An unknown id, or one that is not a blob, raises `ValueError`.
+- `write_tree(entries)`: the tree id of `entries`, path to `(mode, object id)`, with the folders the paths make; `None` for no entries. An entry may be a tree (`040000`). A bad path, or a path that is both a file and a folder, raises `ValueError`; a missing object, `GitError`.
+- `read_tree(id)`: every entry under a tree that is not a folder, path to `(mode, object id)`. An unknown tree raises `ValueError`.
 - `changes()`, async: an iterator of snapshots, the first at once, then one each time the log may have changed.
 - `claim(request, timeout=None)`, async: the Writer, once it is your turn. `async with` the Writer releases it on leaving.
   - Not your turn within `timeout` seconds: raises `TimeoutError`, and you leave the queue.
@@ -54,5 +62,7 @@ async for snapshot in log.changes():        # now, then after every change
 - **A timeout is a claim's own.** Only `claim` can take its ticket back out of the queue. A caller that gave up on its own, by checking `holder()` first or by abandoning a waiting thread, either raced another claimant or left its ticket queued: it kept outranking others, made the holder's `outranked()` true, and finally took the log for nothing. Timing out or cancelling runs the same cleanup as any error in `claim`.
 - **One git repo per project, one branch per log.** Forking is then making a ref, and every commit of every log can be read with `read(at)`. History is kept the git way, with nothing of our own to keep consistent with it.
 - **The store holds a project under its whole path, flattened.** Every repo is one folder directly in the store, so `ls` shows every project. Nested folders that mirror the path were rejected: they are deep to browse, and one project's repo can sit inside another's folders. Escaping `-` and `%` keeps the name unique: `/a-b/c` is `a%2Db-c` and `/a/b-c` is `a-b%2Dc`. Otherwise both would be `a-b-c`.
+- **Objects in and out, and nothing about folders on disk.** `write_blobs`, `blob`, `write_tree` and `read_tree` are what a caller needs to move files between a folder and a tree, so that code lives outside core ([std/store.py](../std/store.md)) and still runs no git: git is run only here, with one environment and one idea of the repo. They work on ids and modes, so they set no policy on what a tree holds. `write_blobs` is one process for any number of files, since a capture may store thousands; `write_tree` builds the folders one `mktree` round trip each.
+- **Files are read from commits, not live.** Readers follow messages as they stream; nothing streams a file. Showing uncommitted files would mean applying the journal's file records to trees on every read. A caller that wants a file it has just put can commit first.
 - **A fork that fails says why.** `FileExistsError` only if the branch is there after git refused; otherwise git's own error as `GitError`, for the same reason as a commit ([git.md](git.md)).
 - **Reads are cached, because readers read on every change.** A viewer reads on every streamed chunk. Without a cache that is three git processes and every message, every time: 58 ms at 5,000 messages. The log keeps the last commit it read ([git.md](git.md)) and the live view on top of the head ([live.md](live.md)). The head is read from the ref file, not from a git process. The cache is best effort: whenever the head, the holder or the journal file differs, the view is rebuilt from the commit.

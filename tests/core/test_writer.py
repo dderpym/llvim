@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from llvim.core import Author, Committing, GitError, Log, Message, Moved, Released, Request
+from llvim.core.live import records
 
 
 @pytest.fixture
@@ -284,3 +285,161 @@ async def test_a_cancelled_commit_still_leaves_the_writer_where_git_put_the_head
                 break  # the commit beat the cancel; waiting longer tests nothing new
         await writer.commit()
     assert messages(log) == [Message(id, f"{id}".encode()) for id in range(step + 1)]
+
+
+async def test_put_files_are_committed_and_kept_by_later_commits(log):
+    async with await log.claim(Request(0)) as writer:
+        writer.put("a", b"1")
+        writer.put("sub/b", b"2")
+        first = await writer.commit()
+        writer.append(b"message")
+        second = await writer.commit()
+    assert log.files(first) == log.files(second) == ["a", "sub/b"]
+    assert log.file("sub/b", second) == b"2"
+
+
+async def test_a_commit_with_only_file_changes_is_a_new_commit(log):
+    async with await log.claim(Request(0)) as writer:
+        first = await writer.commit()
+        writer.put("a", b"")
+        second = await writer.commit()
+    assert second != first
+    assert log.files(first) == [] and log.files(second) == ["a"]
+
+
+async def test_put_of_none_removes_a_file_or_a_folder(log):
+    async with await log.claim(Request(0)) as writer:
+        for path in ["a", "b", "f/x", "f/y/z"]:
+            writer.put(path, b"")
+        await writer.commit()
+        writer.put("a", None)
+        writer.put("f", None)
+        assert log.files(await writer.commit()) == ["b"]
+
+
+async def test_a_later_put_to_a_path_replaces_an_earlier_one(log):
+    async with await log.claim(Request(0)) as writer:
+        writer.put("a", b"first")
+        writer.put("a", b"second")
+        writer.put("f/x", b"")
+        writer.put("f", b"now a file")
+        await writer.commit()
+    assert (log.files(), log.file("a"), log.file("f")) == (["a", "f"], b"second", b"now a file")
+
+
+async def tree_of(log: Log, files: dict[str, bytes]) -> str:
+    """A tree holding `files`, made the way a caller makes one: put, committed, and read back."""
+    async with await log.claim(Request(0)) as writer:
+        for path, content in files.items():
+            writer.put(f"made/{path}", content)
+        await writer.commit()
+        tree = log.tree("made")
+        writer.put("made", None)
+        await writer.commit()
+    return tree
+
+
+async def test_put_tree_sets_a_folder_and_puts_inside_it_apply_on_top(log):
+    tree = await tree_of(log, {"x": b"x", "y": b"y"})
+    async with await log.claim(Request(0)) as writer:
+        writer.put("snap/old", b"")
+        writer.put_tree("snap", tree)
+        writer.put("snap/x", b"changed")
+        writer.put_tree("copy", tree)
+        writer.put_tree("copy", None)
+        await writer.commit()
+    assert log.files() == ["snap/x", "snap/y"]
+    assert log.file("snap/x") == b"changed"
+
+
+async def test_put_tree_of_the_root_replaces_every_file(log):
+    tree = await tree_of(log, {"x": b""})
+    async with await log.claim(Request(0)) as writer:
+        writer.put("old", b"")
+        await writer.commit()
+        writer.put_tree("", tree)
+        await writer.commit()
+    assert log.files() == ["x"]
+
+
+async def test_put_refuses_a_bad_path_and_put_tree_an_unknown_tree(log):
+    async with await log.claim(Request(0)) as writer:
+        for put in [lambda: writer.put("", b""), lambda: writer.put("../a", b""), lambda: writer.put_tree("a", "x")]:
+            with pytest.raises(ValueError):
+                put()
+                pytest.fail("accepted")
+
+
+async def test_a_released_writer_refuses_to_put_files(log):
+    writer = await log.claim(Request(0))
+    writer.release()
+    for put in [lambda: writer.put("a", b""), lambda: writer.put_tree("a", None)]:
+        with pytest.raises(Released):
+            put()
+
+
+async def test_file_changes_made_while_a_commit_runs_go_in_the_next_one(log):
+    async with await log.claim(Request(0)) as writer:
+        writer.put("a", b"1")
+        committing = asyncio.create_task(writer.commit())
+        await asyncio.sleep(0)
+        writer.put("b", b"2")
+        first = await committing
+        assert log.files(first) == ["a"]
+        journal = (log.dir / f"journal.{writer._key}").read_bytes()
+        assert [op for op, _, _ in records(journal)] == [b"B", b"F"], "the fresh journal lacks the late put"
+        assert log.files(await writer.commit()) == ["a", "b"]
+
+
+async def test_file_changes_of_a_failed_commit_are_kept_under_later_ones(log):
+    async with await log.claim(Request(0)) as writer:
+        await writer.commit()
+        stale = log.repo / "refs" / "heads" / "main.lock"
+        stale.write_text("")
+        writer.put("a", b"failed")
+        writer.put("b", b"failed")
+        committing = asyncio.create_task(writer.commit())
+        await asyncio.sleep(0)
+        writer.put("b", b"later")
+        with pytest.raises(GitError):
+            await committing
+        stale.unlink()
+        await writer.commit()
+    assert [log.file("a"), log.file("b")] == [b"failed", b"later"]
+
+
+async def test_restore_brings_back_the_files_too(log):
+    async with await log.claim(Request(0)) as writer:
+        empty = await writer.commit()
+        writer.put("a", b"1")
+        old = await writer.commit()
+        writer.put("a", b"2")
+        writer.put("b", b"")
+        await writer.commit()
+        writer.restore(old)
+        assert log.files(await writer.commit()) == ["a"]
+        assert log.file("a") == b"1"
+        writer.restore(empty)
+        assert log.files(await writer.commit()) == []
+
+
+async def test_a_restore_to_the_same_files_commits_no_file_change(log):
+    async with await log.claim(Request(0)) as writer:
+        writer.put("a", b"")
+        old = await writer.commit()
+        writer.append(b"m")
+        await writer.commit()
+        writer.restore(old)
+        restored = await writer.commit()
+    assert log.tree(at=restored) == log.tree(at=old)
+
+
+async def test_file_changes_are_in_the_journal_as_they_are_made(log):
+    async with await log.claim(Request(0)) as writer:
+        writer.put("a", b"content")
+        writer.put_tree("f", None)
+        journal = (log.dir / f"journal.{writer._key}").read_bytes()
+    blob = subprocess.run(
+        ["git", "--git-dir", str(log.repo), "hash-object", "--stdin"], input=b"content", capture_output=True
+    ).stdout.strip()
+    assert [(op, payload) for op, _, payload in records(journal)][1:] == [(b"F", b"a\0" + blob), (b"T", b"f\0")]

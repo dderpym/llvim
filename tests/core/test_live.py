@@ -65,3 +65,10 @@ def test_a_read_that_finds_nothing_new_gives_the_same_snapshot():
     first = live.snapshot()
     live.take(b"", CONTENTS.__getitem__)
     assert live.snapshot() is first
+
+
+def test_file_records_do_not_change_the_messages():
+    journal = record(b"B", 0, HEAD.encode()) + record(b"F", 0, b"a\0" + b"1" * 40) + record(b"T", 0, b"f\0")
+    snapshot = view(journal).snapshot()
+    assert snapshot.messages == (Message(0, b"a"), Message(1, b"b"))
+    assert snapshot.uncommitted == snapshot.removed == ()
