@@ -32,6 +32,14 @@ def test_the_messages_with_a_role_are_sent_and_the_rest_are_left_out(entry):
     ]  # fmt: skip
 
 
+def test_snapshot_records_are_never_sent_to_the_model(entry):
+    sent = openai.chat([
+        entry(["user"], "hi"), entry(["snapshot"], skipped=["a.bin"]),
+        entry(["snapshot", "error"], "Not snapshotted: too big", refused=True),
+    ])  # fmt: skip
+    assert sent == [{"role": "user", "content": "hi"}]
+
+
 def test_reasoning_goes_back_on_the_assistant_message_after_it_only_for_the_turn_in_progress(entry):
     sent = openai.chat([
         entry(["user"], "one"), entry(["thinking"], "old"), entry(["assistant"], "a"),

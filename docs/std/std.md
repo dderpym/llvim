@@ -9,6 +9,7 @@ run in a session. Nothing in core imports from here.
 | [conversation.py](conversation.md) | `Entry`, `encode`, `decode`, `entries`, `Tag`, `Info`: the message format and its tags |
 | [cues.py](cues.md) | `cue`, `cued`, `busy`, `GENERATE`, `TOOLS`: messages that ask a program to act |
 | [context.py](context.md) | `ContextRenderer`, `render`: a step between a log and a program that reads it as a conversation |
+| [snapshot.py](snapshot.md) | `HOOK`, `choose`, `at`, `left_alone`, `BOX`: the project folder kept with each user message |
 | [store.py](store.md) | `Store`, `Scan`, `Left`, `Unsteady`: files between a folder on disk and git trees in a log's repo |
 | [tmux.py](tmux.md) | `Control`, `Embedded`: a quick connection to tmux, and a program in a hidden tmux window |
 | [panels/](panels/panels.md) | The programs for the panes of a session: the viewer, the input bar and the status bar |

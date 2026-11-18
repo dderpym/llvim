@@ -4,13 +4,13 @@
 cue for the model, signed with your user name.
 
 ```python
-Input(commands=[*STANDARD, my_command]).run()    # the log is the session's (env.log)
+Input(commands=[*STANDARD, my_command], hooks=[snapshot.HOOK]).run()    # the log is the session's (env.log)
 ```
 
 | File | What it defines |
 |---|---|
 | `__init__.py` | `Input`, the program; `main`, the command; `STANDARD`, the commands it has by default: `/quit`, `/exit`, `/help`, `/continue` |
-| [bar.py](bar.md) | `Bar`, `send`, `stop`: what each key does, sending, and the loop |
+| [bar.py](bar.md) | `Bar`, `send`, `stop`, `Hook`: what each key does, sending, and the loop |
 | [editor.py](editor.md) | `Editor`: the line being typed, its cursor and its history |
 | [commands.py](commands.md) | `Command`, `Context`, `@command`, and `/quit`, `/exit`, `/help` |
 | [complete.py](complete.md) | `complete`, `Suggestion`: what to suggest as you type |
@@ -36,3 +36,4 @@ Input(commands=[*STANDARD, my_command]).run()    # the log is the session's (env
 - **The parts know nothing of each other.** The editor knows no terminal, the view is a function of the state and the size, and the
   bar takes its screen, panes and growth as parts, so each is tested alone.
 - **Commands are values the bar is given.** Nothing registers itself, so a session's bar has the commands its layout gives it.
+  Hooks are the same: `Input(hooks=[...])` runs them on each message it sends (`Input.send`), and none by default.

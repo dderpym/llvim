@@ -20,6 +20,7 @@ class Tag(StrEnum):
     TOOL_CALL = "tool_call"  # `[TOOL_CALL, tool]`: see tools/calls.py
     TOOL_START = "tool_start"
     TOOL_RESULT = "tool_result"
+    SNAPSHOT = "snapshot"  # the project folder was kept with this turn, or why not: see snapshot.py
 
 
 ROLES = (Tag.SYSTEM, Tag.USER, Tag.ASSISTANT)

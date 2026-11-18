@@ -33,25 +33,44 @@ PASTE_START, PASTE_END = b"\x1b[200~", b"\x1b[201~"
 VIEWER_KEYS = (*PAGE_UP, *PAGE_DOWN)  # scrolling is the viewer's: the bar passes these on without taking the focus
 
 
-async def after_turn(log: Log, write: Callable[[Writer], None], message: str = "") -> None:
-    """Once the whole turn in progress is over (`cues.take_turn`), `write`, and commit as the user.
+type Hook = Callable[[Log, Writer, str], Awaitable[bool]]
+
+
+async def after_turn(log: Log, write: Callable[[Writer], Awaitable[None] | None], message: str = "") -> None:
+    """Once the whole turn in progress is over (`cues.take_turn`), `write` (awaited if it is async), and commit as the user.
 
     Waiting for the turn, not just for the holder, is what keeps a tool call answered: the model releases the log with a cue
     for the runner, and a claim made while it held the log would be first in the queue, ahead of the runner."""
     user = getpass.getuser()
     async with await cues.take_turn(log, Request(PRIORITY, {Info.INPUT: user})) as writer:
-        write(writer)
+        if inspect.isawaitable(written := write(writer)):
+            await written
         await writer.commit(author=Author(user), message=message)
 
 
-async def send(log: Log, text: str) -> None:
-    """Commit `text` as a user message with a cue for the model, once the turn in progress is over."""
+async def send(log: Log, text: str, hooks: Iterable[Hook] = ()) -> None:
+    """Commit `text` as a user message with a cue for the model, once the turn in progress is over. Each hook runs in
+    order after the message is written, and what it writes goes into the same commit; one that returns False ends the
+    turn there: the rest do not run and the model is not cued."""
 
-    def write(writer: Writer) -> None:
+    async def write(writer: Writer) -> None:
         writer.append(encode([Tag.USER], text))
-        cues.send(writer, GENERATE)
+        if await run_hooks(hooks, log, writer, text):
+            cues.send(writer, GENERATE)
 
     await after_turn(log, write)
+
+
+async def run_hooks(hooks: Iterable[Hook], log: Log, writer: Writer, text: str) -> bool:
+    """True if every hook let the turn go on. A hook that raises is reported in the log and counts as True: the
+    message is already written, and a broken hook must not lose it."""
+    for hook in hooks:
+        try:
+            if not await hook(log, writer, text):
+                return False
+        except Exception as error:
+            writer.append(encode([Tag.ERROR], f"{getattr(hook, '__name__', 'a hook')} failed: {error}"))
+    return True
 
 
 async def stop(log: Log) -> None:

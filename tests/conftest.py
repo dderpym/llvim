@@ -69,11 +69,18 @@ class FakeWriter:
         del self._log._live[id]
         self._log.version += 1
 
+    def put_tree(self, path: str, tree: str | None) -> None:
+        if tree is not None and tree not in self._log._trees:
+            raise ValueError(f"no such tree: {tree!r}")
+        self._log._folders_put[path] = tree
+
     async def commit(self, *, author=LLVIM, message: str = "") -> str:
         log = self._log
-        if log._commits and log._live == log._committed():
+        if log._commits and log._live == log._committed() and not log._folders_put:
             return log.head()
         sha = f"{len(log._commits) + 1:040x}"
+        folders = {path: tree for path, tree in (log._folders_at(log.head()) | log._folders_put).items() if tree}
+        log._folders[sha], log._folders_put = folders, {}
         log._commits.append((sha, dict(log._live)))
         log.authors.append(author)
         log.version += 1
@@ -98,7 +105,7 @@ class FakeWriter:
     def release(self) -> None:
         if not self._released:
             self._released = True
-            self._log._live, self._log._holder = None, None
+            self._log._live, self._log._holder, self._log._folders_put = None, None, {}
             self._log.version += 1
 
     async def __aenter__(self) -> "FakeWriter":
@@ -131,7 +138,8 @@ class FakeLog:
     """The calls of `llvim.core.Log` that std uses, in memory, and helpers that put it in the state a test needs:
     `say` (a committed message), `ask` (a user message and a cue for the model), `write` (an uncommitted one), `hold` (someone
     else holds the log), `waiting` (who waits). `tests/core/test_log.py` checks it has no call the real log lacks.
-    Blobs and trees are kept in memory. A blob's id is git's, since a caller may work one out itself; a tree's is not."""
+    Blobs and trees are kept in memory. A blob's id is git's, since a caller may work one out itself; a tree's is not.
+    A folder put with `Writer.put_tree` is read back by `tree` at the path it was put at, not at a path inside it."""
 
     name = "main"
 
@@ -141,6 +149,8 @@ class FakeLog:
         self._blobs: dict[str, bytes] = {}
         self._trees: dict[str, dict[str, tuple[str, str]]] = {}
         self._commits: list[tuple[str, dict[int, bytes]]] = []
+        self._folders: dict[str, dict[str, str]] = {}  # commit -> folder path -> tree
+        self._folders_put: dict[str, str | None] = {}  # what the holder put, not committed yet
         self._live: dict[int, bytes] | None = None
         self._next = 0
         self._holder: Request | None = None
@@ -204,6 +214,9 @@ class FakeLog:
     def holder(self) -> Request | None:
         return self._holder
 
+    def tree(self, path: str = "", at: str | None = None) -> str | None:
+        return self._folders_at(self.head() if at is None else at).get(path)
+
     def write_blobs(self, sources) -> list[str]:
         ids = []
         for source in sources:
@@ -247,9 +260,9 @@ class FakeLog:
     def say(self, tags, content: str = "", **extra) -> int:
         """A committed message."""
         id = self._new_id()
-        self._commits.append(
-            (f"{len(self._commits) + 1:040x}", self._committed() | {id: encode(tags, content, **extra)})
-        )
+        sha = f"{len(self._commits) + 1:040x}"
+        self._folders[sha] = self._folders_at(self.head())
+        self._commits.append((sha, self._committed() | {id: encode(tags, content, **extra)}))
         self.version += 1
         return id
 
@@ -276,6 +289,9 @@ class FakeLog:
     def _new_id(self) -> int:
         id, self._next = self._next, self._next + 1
         return id
+
+    def _folders_at(self, commit: str | None) -> dict[str, str]:
+        return dict(self._folders.get(commit, {})) if commit else {}
 
     def _committed(self) -> dict[int, bytes]:
         return self._commits[-1][1] if self._commits else {}

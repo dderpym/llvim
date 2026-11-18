@@ -69,6 +69,42 @@ async def test_a_message_waits_for_the_turn_to_end_and_does_not_outrank_the_mode
     assert [content for _, content in said(fake_log)][-3:] == ["answer", "second", ""]
 
 
+async def test_hooks_run_in_order_after_the_message_and_what_they_write_goes_in_its_commit_before_the_cue(fake_log):
+    async def first(log, writer, text):
+        writer.append(encode(["note"], f"first saw {text}"))
+        return True
+
+    async def second(log, writer, text):
+        writer.append(encode(["note"], "second"))
+        return True
+
+    await barmod.send(fake_log, "hi", hooks=[first, second])
+    assert said(fake_log) == [(["user"], "hi"), (["note"], "first saw hi"), (["note"], "second"), (["cue", "generate"], "")]
+    assert len(fake_log._commits) == 1
+
+
+async def test_a_hook_that_returns_false_ends_the_turn_the_message_is_kept_with_no_cue_and_later_hooks_do_not_run(fake_log):
+    ran = []
+
+    async def refuse(log, writer, text):
+        return False
+
+    async def later(log, writer, text):
+        ran.append(text)
+        return True
+
+    await barmod.send(fake_log, "hi", hooks=[refuse, later])
+    assert said(fake_log) == [(["user"], "hi")] and ran == [] and cued(fake_log.read()) is None
+
+
+async def test_a_hook_that_raises_is_reported_and_the_message_still_goes_to_the_model(fake_log):
+    async def broken(log, writer, text):
+        raise RuntimeError("boom")
+
+    await barmod.send(fake_log, "hi", hooks=[broken])
+    assert said(fake_log) == [(["user"], "hi"), (["error"], "broken failed: boom"), (["cue", "generate"], "")]
+
+
 async def test_stop_outranks_any_provider_and_notes_it_without_asking_for_an_answer(fake_log):
     await barmod.stop(fake_log)
     assert said(fake_log) == [(["user", "stop"], "User stopped this response.")]

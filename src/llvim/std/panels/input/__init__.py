@@ -7,7 +7,7 @@ from collections.abc import Iterable
 
 from llvim.core import Log
 from llvim.std import env
-from llvim.std.panels.input.bar import Bar, open_history, quit_session, send
+from llvim.std.panels.input.bar import Bar, Hook, open_history, quit_session, send
 from llvim.std.panels.input.commands import EXIT, HELP, QUIT, Command, Context, command
 from llvim.std.panels.input.generate import CONTINUE
 from llvim.std.panels.input.pane import Growth
@@ -15,14 +15,18 @@ from llvim.std.panels.keys import Panes
 
 STANDARD = [QUIT, EXIT, HELP, CONTINUE]
 
-__all__ = ["STANDARD", "Bar", "Command", "Context", "Input", "command", "main", "quit_session", "send"]
+__all__ = ["STANDARD", "Bar", "Command", "Context", "Hook", "Input", "command", "main", "quit_session", "send"]
 
 
 class Input:
-    """`Input(commands=[...]).run()`. `log` defaults to the session's (`env.log`)."""
+    """`Input(commands=[...], hooks=[...]).run()`. `log` defaults to the session's (`env.log`). The hooks run on each
+    message sent (`bar.send`), not on commands or stops."""
 
-    def __init__(self, commands: Iterable[Command] = STANDARD, log: Log | None = None):
-        self.commands, self.log = list(commands), log
+    def __init__(self, commands: Iterable[Command] = STANDARD, log: Log | None = None, hooks: Iterable[Hook] = ()):
+        self.commands, self.log, self.hooks = list(commands), log, list(hooks)
+
+    async def send(self, log: Log, text: str) -> None:
+        await send(log, text, self.hooks)
 
     def run(self) -> None:
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -33,7 +37,7 @@ class Input:
         log = self.log or env.log()
         try:
             with Screen(mouse=False, paste=True) as screen:
-                bar = Bar(log, screen, Panes(), Growth(), history, commands=self.commands)
+                bar = Bar(log, screen, Panes(), Growth(), history, commands=self.commands, send=self.send)
                 try:
                     asyncio.run(bar.run())
                 finally:

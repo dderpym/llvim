@@ -4,7 +4,7 @@ Each function is what runs in one pane: `llvim-run` imports this file again ther
 importing this file starts nothing; `start` lays the panes out, once, in the first pane. See docs/session.md.
 """
 
-from llvim.std import env, void
+from llvim.std import env, snapshot, void
 from llvim.std.panels.input import STANDARD, Input
 from llvim.std.panels.logviewer import Viewer
 from llvim.std.panels.status import Status
@@ -16,11 +16,11 @@ TOOLS = [bash.TOOL]  # what the model is offered and the runner runs: add your o
 
 
 def viewer():
-    Viewer(renderers=[void.BOX, bash.BOX]).run()  # void first: a voided bash call shows nothing
+    Viewer(renderers=[void.BOX, snapshot.BOX, bash.BOX]).run()  # void first: a voided bash call shows nothing
 
 
 def palette():
-    Input(commands=[*STANDARD, bash.COMMAND, void.COMMAND]).run()
+    Input(commands=[*STANDARD, bash.COMMAND, void.COMMAND], hooks=[snapshot.HOOK]).run()
 
 
 def status():

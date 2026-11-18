@@ -14,8 +14,8 @@ for entry in entries(log.read()):
   holding its bytes as text; it never raises.
 - `entries(snapshot)`: every message of a snapshot. The ones in `snapshot.uncommitted` are `uncommitted`, and the last message, if
   uncommitted, is `streaming`.
-- `Tag`: `system`, `user`, `assistant`, `thinking`, `status`, `error`, `stop`, `cue`, and `tool_call`, `tool_start`,
-  `tool_result` ([calls.md](tools/calls.md)). `ROLES` are the three a chat message has.
+- `Tag`: `system`, `user`, `assistant`, `thinking`, `status`, `error`, `stop`, `cue`, `tool_call`, `tool_start`,
+  `tool_result` ([calls.md](tools/calls.md)), and `snapshot` ([snapshot.md](snapshot.md)). `ROLES` are the three a chat message has.
 - `Field`: the fields the standard programs write: `model`, and on tool calls `call_id`, `user` and `error`.
 - `Info`: the keys of a claim's `data` (`provider`, `model`, `input`, `tools`), which say who holds or waits for the log.
 

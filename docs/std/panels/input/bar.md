@@ -1,4 +1,4 @@
-# `std/panels/input/bar.py`: Bar, send, stop
+# `std/panels/input/bar.py`: Bar, send, stop, hooks
 
 The input bar's state (the editor, the menu, a notice), what each key does to it, and sending what was typed.
 
@@ -8,8 +8,13 @@ await bar.run()                                  # until /quit or the terminal c
 ```
 
 - `after_turn(log, write, message="")`, async: takes the log once the whole turn is over (`cues.take_turn`,
-  [cues.md](../../cues.md)), calls `write(writer)` and commits as the user.
-- `send(log, text)`, async: `after_turn` writing a `["user"]` message with `text` and a `GENERATE` cue.
+  [cues.md](../../cues.md)), calls `write(writer)` (awaiting it, if it is async) and commits as the user.
+- `send(log, text, hooks=())`, async: `after_turn` writing a `["user"]` message with `text`, then running `hooks`, then a
+  `GENERATE` cue.
+- A `Hook` is `async def hook(log, writer, text) -> bool`. `run_hooks(hooks, log, writer, text)` runs them in order:
+  - each returns True: the cue is written;
+  - one returns False: the rest do not run and there is no cue; the message is still committed, and the turn ends there;
+  - one raises: an `["error"]` message "<hook> failed: <error>" is written and it counts as True.
 - `stop(log)`, async: takes the log at `STOP_PRIORITY`, above any provider, and commits `["user", "stop"]` "User stopped this
   response.", with no cue.
 - `quit_session()`: ends the tmux session the bar runs in, and every panel with it. Outside tmux, nothing.
@@ -32,7 +37,11 @@ await bar.run()                                  # until /quit or the terminal c
   overtakes any cue, so calls not yet run are dropped, the turn is over, and the queue goes in, one item per turn.
 - An item that fails is reported under the prompt ("not sent: ..."); the next one still goes. A typed line is in the history.
 - A command may be `async`: the bar runs it beside the keyboard and reports what it raises.
-- `send`, `stop`, `quit` and `busy` are parameters so a test, or a different session, can put its own in.
+- `send`, `stop`, `quit` and `busy` are parameters so a test, or a different session, can put its own in. `Input` passes a
+  `send` that runs its hooks ([input.md](input.md)).
+- Hooks run only on a sent message: `stop`, `/continue` and other commands run none. They run while the log is held, so a slow
+  hook holds up the send, and what one writes or stages (`writer.put_tree`) goes into the message's commit. The snapshot hook is
+  one ([snapshot.md](../../snapshot.md)).
 
 ## Why it is this way
 
@@ -48,5 +57,12 @@ await bar.run()                                  # until /quit or the terminal c
 - **Everything that writes for the user goes through one queue.** Sending at once when the model is idle and queueing when it is
   busy were two paths that did the same thing, so there is one: wait for the turn, then claim. When the model is idle the wait is
   one read. `/continue` is in the same queue, so it lands where it was typed among the messages.
+- **Hooks run between the message and its commit.** A hook that keeps something with a turn (the project folder) must land in
+  the same commit as the message, or "as of this message" would be two commits that something else can come between. Before the
+  claim was rejected: what the hook saw could change while the turn waited. After the commit was rejected: it needs a claim of
+  its own.
+- **A raising hook does not lose the message.** The message is already written when the hooks run; dropping it because a hook
+  broke would lose what the user typed. The error goes into the log, where the user sees it, and the model still answers. A hook
+  that wants the turn to end says so by returning False.
 - **Work runs beside the keyboard.** Sending, stopping and an async command are tasks on the bar's loop, so typing never waits for the
   log. Each ends by waking the loop, which draws what changed.

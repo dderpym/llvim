@@ -27,8 +27,8 @@ llvim-openai alt -p ~/proj -m llama3 --base-url http://localhost:11434/v1
 
 - **What is sent:** the log as the `context` renderers leave it (with `void.CONTEXT`, without voided messages). Of that, the
   entries tagged `system`, `user` or `assistant`, with that role. Thinking goes back as the `reasoning_content`
-  of the assistant message after it, for the turn in progress only (after the last user message). Cues, errors and anything else are
-  left out. A tool call goes on the assistant message before it as `tool_calls`, followed by one `tool` message per call, holding
+  of the assistant message after it, for the turn in progress only (after the last user message). Cues, errors, snapshot records
+  ([snapshot.md](../snapshot.md)) and anything else are left out. A tool call goes on the assistant message before it as `tool_calls`, followed by one `tool` message per call, holding
   its result wherever that is in the log, or `[no result: ...]` if it has none. A call whose arguments are not JSON is left out,
   with its result if it has one. A call the user made (`/bash`) is a user message
   instead, `I ran this in a terminal: $ <command>` and its output, once it has a result ([calls.md](../tools/calls.md)).
